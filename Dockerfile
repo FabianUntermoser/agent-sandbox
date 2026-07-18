@@ -73,8 +73,8 @@ COPY config/claude-settings.json /home/$USERNAME/.claude/settings.json
 RUN chown -R $USERNAME:$USERNAME /home/$USERNAME/.claude
 
 # ── Firewall + entrypoint ─────────────────────
-COPY init-firewall.sh /usr/local/bin/init-firewall.sh
-COPY sandbox-entry.sh /usr/local/bin/sandbox-entry.sh
+COPY scripts/init-firewall.sh /usr/local/bin/init-firewall.sh
+COPY scripts/sandbox-entry.sh /usr/local/bin/sandbox-entry.sh
 RUN chmod +x /usr/local/bin/init-firewall.sh /usr/local/bin/sandbox-entry.sh \
   && echo "$USERNAME ALL=(root) NOPASSWD: /usr/local/bin/init-firewall.sh" > /etc/sudoers.d/init-firewall \
   && chmod 0440 /etc/sudoers.d/init-firewall
