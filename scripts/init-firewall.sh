@@ -48,6 +48,9 @@ ALLOWED_DOMAINS=(
 )
 # ---------------------------------------------------------------------------
 
+echo "" >&2
+echo "[2] Network" >&2
+
 # Flush ONLY the filter table (invariant #2). Drop leftover ipset.
 iptables -F
 iptables -X

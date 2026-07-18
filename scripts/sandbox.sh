@@ -93,9 +93,11 @@ done < <(find "$WORK" -maxdepth 1 -type l -print0 2>/dev/null)
 
 echo "sandbox: $WORK" >&2
 if [ ${#SYMLINKS[@]} -gt 0 ]; then
-	echo "---" >&2
+	echo "" >&2
+	echo "[1] Resolving symlinks" >&2
 	for s in "${SYMLINKS[@]}"; do echo "  $s" >&2; done
 fi
+echo "" >&2
 
 exec docker run --rm -it \
 	--name "$NAME" \
