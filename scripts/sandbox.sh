@@ -76,10 +76,6 @@ mounts=(-v "$WORK:$WORK")
 # Auth mounts
 [ -f "$HOME/.claude/.credentials.json" ] && mounts+=(-v "$HOME/.claude/.credentials.json:/home/$RUSER/.claude/.credentials.json")
 [ -d "$HOME/.pi" ] && mounts+=(-v "$HOME/.pi:/home/$RUSER/.pi")
-
-# Mount private pi config at real path so symlinks in ~/.pi/agent/ resolve
-pvt=$(readlink -f "$HOME/.pi/agent/models.json" 2>/dev/null) && pvt="${pvt%/models.json}"
-[ -d "$pvt" ] && mounts+=(-v "$pvt:$pvt:ro")
 [ -d "$HOME/.codex" ] && mounts+=(-v "$HOME/.codex:/home/$RUSER/.codex")
 [ -d "$HOME/.config/gh" ] && mounts+=(-v "$HOME/.config/gh:/home/$RUSER/.config/gh:ro")
 [ -d "$HOME/.config/glab-cli" ] && mounts+=(-v "$HOME/.config/glab-cli:/home/$RUSER/.config/glab-cli:ro")
