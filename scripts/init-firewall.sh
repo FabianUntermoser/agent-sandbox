@@ -77,14 +77,16 @@ echo "$gh_ranges" | jq -r '(.web + .api + .git)[]' | while read -r cidr; do
   ipset add allowed-domains "$cidr" 2>/dev/null || true
 done
 
-# Resolve + allow each allowlisted domain
+# Resolve all allowlisted domains in parallel (cuts ~16s sequential to ~1s)
 for domain in "${ALLOWED_DOMAINS[@]}"; do
-  echo "Resolving $domain..."
-  ips=$(dig +short A "$domain" | grep -E '^[0-9.]+$' || true)
-  for ip in $ips; do
-    ipset add allowed-domains "$ip" 2>/dev/null || true
-  done
+  (
+    ips=$(dig +short A "$domain" | grep -E '^[0-9.]+$' || true)
+    for ip in $ips; do
+      ipset add allowed-domains "$ip" 2>/dev/null || true
+    done
+  ) &
 done
+wait
 
 # Return traffic
 iptables -A INPUT  -m state --state ESTABLISHED,RELATED -j ACCEPT
