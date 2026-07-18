@@ -17,31 +17,29 @@ Sandbox container for AI agents (Claude, Codex, pi).
 ./setup.sh
 
 # run in any project directory
-sandbox.sh
-sandbox.sh claude
-sandbox.sh pi
-sandbox.sh codex
-sandbox.sh ollama launch claude
-sandbox.sh --new          # force fresh container
-sandbox.sh --build        # rebuild image
-sandbox.sh -v npm test    # run without tmux
-sandbox.sh pytest         # any command
-
-Running `sandbox.sh` again in the same directory reattaches to the existing
-container (conversations persist). `--new` forces a fresh one.
+sandbox.sh                    # interactive shell
+sandbox.sh claude             # Claude Code
+sandbox.sh pi                 # pi coding agent
+sandbox.sh codex              # OpenAI Codex
+sandbox.sh ollama launch claude  # agent on local models
+sandbox.sh --new              # force fresh container
+sandbox.sh --build            # rebuild image
+sandbox.sh -v npm test        # run without tmux
+sandbox.sh pytest             # any command
 ```
 
-### How it works
+Running `sandbox.sh` again in the same directory reattaches to the existing
+container. `--new` forces a fresh one.
 
-Default-deny egress firewall via iptables. Allowlist: Anthropic API, GitHub,
-GitLab, npm, PyPI, crates.io, Go proxy, ollama.com. Edit
-`scripts/init-firewall.sh` to change. Re-applied on every container start
-(`--rm` means fresh netns each time).
+### Features
 
-Mounts `$PWD` at its real host path so project keys match host (Claude
-`--resume` works, memory persists). Auth mounted from host at runtime
-(`~/.claude`, `~/.pi`, `~/.codex`, `~/.config/gh`, `~/.config/glab-cli`,
-`~/.gitconfig`). Nothing stored in the image.
+- **Default-deny egress firewall** — only allowlisted domains can be reached
+  (Anthropic, GitHub, GitLab, npm, PyPI, crates.io, Go proxy, ollama.com).
+  Edit `scripts/init-firewall.sh` to change.
+- **Auth from host** — mounts `~/.claude`, `~/.pi`, `~/.codex`, `~/.config/gh`,
+  `~/.config/glab-cli`, `~/.gitconfig` at runtime. Nothing stored in the image.
+- **Works in any directory** — mounts `$PWD` at its real host path so project
+  keys match (Claude `--resume` works, memory persists).
 
 ### Build
 
@@ -49,20 +47,6 @@ Mounts `$PWD` at its real host path so project keys match host (Claude
 make build
 # or
 docker buildx bake --load
-```
-
-### Project structure
-
-```
-├── Dockerfile
-├── Makefile
-├── docker-bake.hcl
-├── config/                 # default shell configs
-└── scripts/
-    ├── init-firewall.sh
-    ├── sandbox-entry.sh
-    ├── sandbox.sh
-    └── setup.sh
 ```
 
 ### License
