@@ -10,14 +10,9 @@ A standalone, network-firewalled dev container for running AI agents (Claude,
 pi, codex) or any command against `$PWD`. Everything baked into the image, no
 host symlinks.
 
-### Use Case
+### Getting started
 
-- Run Claude Code, pi, or codex in any project directory without installing them locally
-- Test npm/pip/pytest commands in a clean, firewalled environment
-- Run agents on local models via ollama without network access to external APIs
-- Share a reproducible dev environment across machines
-
-### Quick start
+**Prerequisites:** Docker with BuildKit, Linux with iptables.
 
 ```sh
 # one-time setup
@@ -46,6 +41,14 @@ Mounts `$PWD` at its real host path so project keys match host (Claude
 `--resume` works, memory persists). Auth mounted from host at runtime
 (`~/.claude`, `~/.pi`, `~/.codex`, `~/.config/gh`, `~/.config/glab-cli`,
 `~/.gitconfig`). Nothing stored in the image.
+
+### Build
+
+```sh
+make build
+# or
+docker buildx bake --load
+```
 
 ### Project structure
 
