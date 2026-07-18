@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Throwaway, network-firewalled dev container for the current project.
 # Mounts $PWD at its real host path; runs any command (default: shell).
-# See README.md for full docs.
+# Dynamically resolves symlinks in $PWD and mounts their real targets.
 
 set -euo pipefail
 
@@ -70,9 +70,8 @@ while docker ps -a --format '{{.Names}}' | grep -qx "$NAME"; do NAME="$base-$n";
 
 mounts=(-v "$WORK:$WORK")
 
-# Mount auth/config directly from host
+# Auth mounts
 [ -f "$HOME/.claude/.credentials.json" ] && mounts+=(-v "$HOME/.claude/.credentials.json:/home/$RUSER/.claude/.credentials.json")
-[ -f "$HOME/.claude/CLAUDE.md" ] && mounts+=(-v "$HOME/.claude/CLAUDE.md:/home/$RUSER/.claude/CLAUDE.md:ro")
 [ -d "$HOME/.pi" ] && mounts+=(-v "$HOME/.pi:/home/$RUSER/.pi")
 [ -d "$HOME/.codex" ] && mounts+=(-v "$HOME/.codex:/home/$RUSER/.codex")
 [ -d "$HOME/.config/gh" ] && mounts+=(-v "$HOME/.config/gh:/home/$RUSER/.config/gh:ro")
@@ -84,7 +83,19 @@ mounts=(-v "$WORK:$WORK")
 # Claude project dir (per-folder convos + memory)
 mounts+=(-v "$PROJ:/home/$RUSER/.claude/projects/$KEY")
 
+# Dynamically mount symlink targets from $PWD
+# Resolve each symlink and mount the real path so targets outside $WORK are accessible
+SYMLINKS=()
+while IFS= read -r -d '' link; do
+	target=$(readlink -f "$link")
+	[ -n "$target" ] && [ -e "$target" ] && mounts+=(-v "$target:$link") && SYMLINKS+=("$link -> $target")
+done < <(find "$WORK" -maxdepth 1 -type l -print0 2>/dev/null)
+
 echo "sandbox: $WORK" >&2
+if [ ${#SYMLINKS[@]} -gt 0 ]; then
+	echo "---" >&2
+	for s in "${SYMLINKS[@]}"; do echo "  $s" >&2; done
+fi
 
 exec docker run --rm -it \
 	--name "$NAME" \
