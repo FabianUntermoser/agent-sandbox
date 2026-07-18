@@ -1,5 +1,6 @@
-#!/bin/bash
-# Canonical default-deny egress firewall for an agent sandbox container.
+#!/usr/bin/env bash
+
+# USAGE: default-deny egress firewall for agent sandbox container
 #
 # Two correctness invariants are baked in here — do not "simplify" them away:
 #  (1) Policies are reset to ACCEPT right after the flush so a re-run can still
@@ -9,47 +10,13 @@
 #  (2) Only the `filter` table is flushed. Flushing `nat` destroys Docker's
 #      embedded DNS (127.0.0.11) → all egress dead. Never add `iptables -t nat -F`.
 #
-# Tune ALLOWED_DOMAINS for the project's stack. Keep everything else.
+# Static domains are pre-resolved at build time into /etc/allowlist.sh.
+# Only GitHub IP ranges (which change often) are fetched at runtime.
+
 set -euo pipefail
 IFS=$'\n\t'
 
-# --- allowlist: edit this for the project ----------------------------------
-ALLOWED_DOMAINS=(
-  # Claude Code
-  api.anthropic.com
-  statsig.anthropic.com
-  downloads.claude.ai
-  # raw/codeload for git installs (GitHub IP ranges added separately below)
-  raw.githubusercontent.com
-  codeload.github.com
-  objects.githubusercontent.com
-  # git remote
-  github.com
-  gitlab.com
-  # npm
-  registry.npmjs.org
-  # python
-  pypi.org
-  files.pythonhosted.org
-  # rust
-  crates.io
-  static.crates.io
-  # go
-  proxy.golang.org
-  sum.golang.org
-  # atlassian (acli)
-  api.atlassian.com
-  id.atlassian.com
-  auth.atlassian.com
-  joaia.atlassian.net
-  # ollama (cloud models + integration sign-in; local models use loopback, no allowlist)
-  ollama.com
-  registry.ollama.ai
-)
-# ---------------------------------------------------------------------------
-
-echo "" >&2
-echo "[2] Network" >&2
+## FLUSH
 
 # Flush ONLY the filter table (invariant #2). Drop leftover ipset.
 iptables -F
@@ -62,6 +29,8 @@ iptables -P INPUT ACCEPT
 iptables -P FORWARD ACCEPT
 iptables -P OUTPUT ACCEPT
 
+## DNS + LOCAL
+
 # DNS (incl. docker embedded resolver) + localhost
 iptables -A OUTPUT -p udp --dport 53 -j ACCEPT
 iptables -A INPUT  -p udp --sport 53 -j ACCEPT
@@ -70,26 +39,20 @@ iptables -A INPUT  -p tcp --sport 53 -j ACCEPT
 iptables -A INPUT  -i lo -j ACCEPT
 iptables -A OUTPUT -o lo -j ACCEPT
 
+## ALLOWLIST
+
 ipset create allowed-domains hash:net
 
-# GitHub IP ranges (web/api/git) from the meta API
-echo "Fetching GitHub IP ranges..."
-gh_ranges=$(curl -fsSL https://api.github.com/meta)
+# Pre-resolved static domains (built at image build time — no DNS at runtime)
+source /etc/allowlist.sh
+
+# GitHub IP ranges (web/api/git) from the meta API — fetched at runtime
+# because they change frequently
+gh_ranges=$(curl -fsSL https://api.github.com/meta 2>/dev/null)
 echo "$gh_ranges" | jq -r '(.web + .api + .git)[]' | while read -r cidr; do
   [[ -z "$cidr" ]] && continue
   ipset add allowed-domains "$cidr" 2>/dev/null || true
 done
-
-# Resolve all allowlisted domains in parallel (cuts ~16s sequential to ~1s)
-for domain in "${ALLOWED_DOMAINS[@]}"; do
-  (
-    ips=$(dig +short A "$domain" | grep -E '^[0-9.]+$' || true)
-    for ip in $ips; do
-      ipset add allowed-domains "$ip" 2>/dev/null || true
-    done
-  ) &
-done
-wait
 
 # Return traffic
 iptables -A INPUT  -m state --state ESTABLISHED,RELATED -j ACCEPT
@@ -107,16 +70,12 @@ iptables -P INPUT DROP
 iptables -P FORWARD DROP
 iptables -P OUTPUT DROP
 
-echo "Firewall configured. Verifying..."
-if curl -fsS --max-time 5 https://example.com >/dev/null 2>&1; then
-  echo "WARNING: example.com reachable — firewall not blocking as expected." >&2
-else
-  echo "OK: blocked host unreachable."
+## VERIFY
+
+echo -e "  \e[1mnetwork:\e[0m OK" >&2
+
+# Quick verify: blocked host fails, allowed host gets HTTP response
+if curl -fsS --max-time 3 https://example.com >/dev/null 2>&1; then
+  echo "  WARN: egress not blocked" >&2
 fi
-# 401/404 are fine — any HTTP response means the connection got through
-code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 https://api.anthropic.com || echo 000)
-if [[ "$code" != "000" ]]; then
-  echo "OK: api.anthropic.com reachable (HTTP $code)."
-else
-  echo "WARNING: api.anthropic.com unreachable — allowlist may be incomplete." >&2
-fi
+curl -s -o /dev/null -w '%{http_code}' --max-time 3 https://api.anthropic.com | grep -q 000 && echo "  WARN: anthropic unreachable" >&2 || true

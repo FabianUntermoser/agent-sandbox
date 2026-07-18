@@ -1,11 +1,18 @@
 #!/usr/bin/env bash
-# One-time setup: build image, install sandbox.sh.
+
+# USAGE: one-time setup — build image, install sandbox.sh to PATH
+
 set -euo pipefail
 
+die() { echo -e "\e[31merror:\e[0m $*" >&2; exit 1; }
 info() { echo -e "\e[36m>\e[0m $*"; }
 
+## DEFAULTS
+
 IMAGE=agent-sandbox
-REPO_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+REPO_DIR="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
+
+## MAIN
 
 info "Building image '$IMAGE'..."
 cd "$REPO_DIR"
