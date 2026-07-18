@@ -1,0 +1,53 @@
+# Container-local zsh init, sourced from ~/.zshrc inside the sandbox.
+# The host ~/.zshrc is distro-specific (sources Arch/Manjaro framework bits) and
+# can't be mounted here, so this provides just enough for the portable dotfiles
+# aliasrc files to load.
+
+# --- basics ---
+autoload -Uz compinit && compinit -u 2>/dev/null
+
+# Shims for helpers the aliasrc files expect but that live in the (non-portable)
+# host framework. Map zsh global/expandable aliases to plain ones.
+exists() { hash "$1" 2>/dev/null; }
+create_alias() { alias "${@: -1}"; }
+
+[ -f ~/.config/aliasrc ]     && source ~/.config/aliasrc
+[ -f ~/.config/zsh/aliasrc ] && source ~/.config/zsh/aliasrc
+
+alias claude='claude --dangerously-skip-permissions'
+
+# --- vim mode ---
+bindkey '^H' backward-kill-word
+bindkey -v
+export KEYTIMEOUT=1
+
+# cursor shape: beam in insert, block in normal
+zle-keymap-select() {
+  if [[ ${KEYMAP} == vicmd ]] || [[ $1 = 'block' ]]; then
+    echo -ne '\e[1 q'
+  else
+    echo -ne '\e[5 q'
+  fi
+}
+zle -N zle-keymap-select
+
+# prevent ^S from freezing terminal
+[[ -o interactive ]] && stty -ixon </dev/tty 2>/dev/null
+
+# --- completion ---
+fpath=("$ZDOTDIR/completions" $fpath)
+autoload -U compaudit compinit
+zmodload zsh/complist
+compinit -u 2>/dev/null
+
+zstyle ':completion:*' menu select
+zstyle ':completion:*' matcher-list '' 'm:{a-zA-Z}={A-Za-z}' 'r:|[._-]=* r:|=*' 'l:|=* r:|=*'
+_comp_options+=(globdots)
+
+# --- prompt ---
+autoload -Uz vcs_info
+zstyle ':vcs_info:git:*' formats ' %F{green}%b%f'
+setopt prompt_subst
+precmd() { vcs_info; print -Pn '\e]2;sandbox: %~\a' }
+PROMPT='%F{red}⬢%f %F{cyan}%2~%f${vcs_info_msg_0_} %# '
+RPROMPT='%(?..%F{red}%?%f)'

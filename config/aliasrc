@@ -1,0 +1,11 @@
+# Container aliases
+alias ls='ls --color=auto'
+alias ll='ls -la'
+alias la='ls -A'
+alias l='ls -CF'
+alias grep='grep --color=auto'
+alias ..='cd ..'
+alias ...='cd ../..'
+alias cls='clear'
+alias h='history'
+alias j='jobs -l'

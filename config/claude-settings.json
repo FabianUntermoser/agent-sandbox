@@ -1,0 +1,61 @@
+{
+  "enabledPlugins": {
+    "clangd-lsp@claude-plugins-official": true,
+    "mongodb@claude-plugins-official": false,
+    "context-mode@context-mode": true,
+    "skill-creator@claude-plugins-official": true,
+    "caveman@caveman": true,
+    "worktrunk@worktrunk": true,
+    "frontend-design@claude-plugins-official": true,
+    "superpowers@claude-plugins-official": true,
+    "context7@claude-plugins-official": true,
+    "github@claude-plugins-official": true,
+    "feature-dev@claude-plugins-official": true,
+    "claude-md-management@claude-plugins-official": true,
+    "codex@openai-codex": true,
+    "azure@azure-skills": false,
+    "posthog@claude-plugins-official": true,
+    "playwright@claude-plugins-official": true,
+    "coderabbit@claude-plugins-official": true
+  },
+  "extraKnownMarketplaces": {
+    "context-mode": {
+      "source": {
+        "source": "github",
+        "repo": "mksglu/context-mode"
+      }
+    },
+    "mongodb-plugins": {
+      "source": {
+        "source": "github",
+        "repo": "mongodb/agent-skills"
+      }
+    },
+    "caveman": {
+      "source": {
+        "source": "github",
+        "repo": "JuliusBrussee/caveman"
+      }
+    },
+    "worktrunk": {
+      "source": {
+        "source": "github",
+        "repo": "max-sixty/worktrunk"
+      }
+    },
+    "openai-codex": {
+      "source": {
+        "source": "github",
+        "repo": "openai/codex-plugin-cc"
+      }
+    },
+    "azure-skills": {
+      "source": {
+        "source": "github",
+        "repo": "microsoft/azure-skills"
+      }
+    }
+  },
+  "skipDangerousModePermissionPrompt": true,
+  "skipWorkflowUsageWarning": true
+}
