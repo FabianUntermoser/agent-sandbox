@@ -22,7 +22,7 @@ apt-get install -y --no-install-recommends \
   less git procps sudo fzf zsh man-db unzip gnupg2 \
   ripgrep fd-find jq nano vim ffmpeg tmux \
   python3 python3-pip python3-venv pipx \
-  iptables ipset iproute2 dnsutils ca-certificates curl \
+  iptables ipset iproute2 dnsutils ca-certificates curl bubblewrap \
   gh
 ln -s "$(command -v fdfind)" /usr/local/bin/fd
 rm -rf /var/lib/apt/lists/*
