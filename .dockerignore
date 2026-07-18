@@ -1,0 +1,36 @@
+# --- copied from .gitignore ---
+stow/sway/.config/sway/definitions.d/theme.conf
+stow/sway/.config/sway/workspaces
+stow/sway/.config/sway/outputs
+stow/nvim/.config/coc/
+stow/nvim/.config/coc/ultisnips
+stow/nvim/.config/nvim/after/plugin/*.local.lua
+stow/nvim/.config/nvim/lazy-lock.json
+stow/zsh/.config/zsh/.fasd-init-zsh
+stow/zsh/.config/zsh/.zcompdump
+stow/ranger/.config/ranger/plugins
+stow/nvim/.vim/thesaurus/mthesaur.txt
+stow/yazi/.config/yazi/flavors
+stow/qutebrowser/.config/qutebrowser/__pycache__/
+
+# --- Docker additions ---
+.git
+.gitignore
+.dockerignore
+Dockerfile*
+compose*.yaml
+docker-compose*.yml
+docker-bake.hcl
+
+# secrets & local env
+.env
+.env.*
+*.pem
+secrets/
+
+# CI / docs / editor / OS cruft
+.github/
+README.md
+.vscode/
+.idea/
+.DS_Store
