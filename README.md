@@ -1,7 +1,7 @@
 # agent-sandbox
 
 A standalone, network-firewalled dev container for running AI agents (Claude,
-pi, codex) or any command against `$PWD` — everything baked into the image, no
+pi, codex) or any command against `$PWD` - everything baked into the image, no
 host symlinks.
 
 ```sh
