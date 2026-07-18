@@ -24,7 +24,6 @@ help() {
 
 IMAGE=agent-sandbox
 RUSER=node
-CONFIG_VOLUME=agent-sandbox-config
 REPO_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
 
 FORCE_NEW=
@@ -69,39 +68,18 @@ fi
 n=2; base=$NAME
 while docker ps -a --format '{{.Names}}' | grep -qx "$NAME"; do NAME="$base-$n"; n=$((n+1)); done
 
-mounts=(
-	-v "$WORK:$WORK"
-	-v "$CONFIG_VOLUME:/home/$RUSER/.config-volume"
-)
+mounts=(-v "$WORK:$WORK")
 
-# Mount config volume contents to their expected paths
-# (setup.sh copies auth into the volume; this maps them in)
-if docker volume inspect "$CONFIG_VOLUME" >/dev/null 2>&1; then
-	# claude credentials
-	[ -f "/home/$RUSER/.config-volume/claude/credentials.json" ] 2>/dev/null && \
-		mounts+=(-v "$CONFIG_VOLUME/claude/credentials.json:/home/$RUSER/.claude/.credentials.json")
-	[ -f "/home/$RUSER/.config-volume/claude/CLAUDE.md" ] 2>/dev/null && \
-		mounts+=(-v "$CONFIG_VOLUME/claude/CLAUDE.md:/home/$RUSER/.claude/CLAUDE.md:ro")
-	# pi auth
-	[ -d "/home/$RUSER/.config-volume/pi" ] 2>/dev/null && \
-		mounts+=(-v "$CONFIG_VOLUME/pi:/home/$RUSER/.pi")
-	# codex auth
-	[ -d "/home/$RUSER/.config-volume/codex" ] 2>/dev/null && \
-		mounts+=(-v "$CONFIG_VOLUME/codex:/home/$RUSER/.codex")
-	# gh auth
-	[ -d "/home/$RUSER/.config-volume/gh" ] 2>/dev/null && \
-		mounts+=(-v "$CONFIG_VOLUME/gh:/home/$RUSER/.config/gh:ro")
-	# glab auth
-	[ -d "/home/$RUSER/.config-volume/glab-cli" ] 2>/dev/null && \
-		mounts+=(-v "$CONFIG_VOLUME/glab-cli:/home/$RUSER/.config/glab-cli:ro")
-	# git config
-	[ -f "/home/$RUSER/.config-volume/gitconfig" ] 2>/dev/null && \
-		mounts+=(-v "$CONFIG_VOLUME/gitconfig:/home/$RUSER/.gitconfig:ro")
-	[ -d "/home/$RUSER/.config-volume/git" ] 2>/dev/null && \
-		mounts+=(-v "$CONFIG_VOLUME/git:/home/$RUSER/.config/git:ro")
-	[ -d "/home/$RUSER/.config-volume/git-private" ] 2>/dev/null && \
-		mounts+=(-v "$CONFIG_VOLUME/git-private:/home/$RUSER/.config/git-private:ro")
-fi
+# Mount auth/config directly from host
+[ -f "$HOME/.claude/.credentials.json" ] && mounts+=(-v "$HOME/.claude/.credentials.json:/home/$RUSER/.claude/.credentials.json")
+[ -f "$HOME/.claude/CLAUDE.md" ] && mounts+=(-v "$HOME/.claude/CLAUDE.md:/home/$RUSER/.claude/CLAUDE.md:ro")
+[ -d "$HOME/.pi" ] && mounts+=(-v "$HOME/.pi:/home/$RUSER/.pi")
+[ -d "$HOME/.codex" ] && mounts+=(-v "$HOME/.codex:/home/$RUSER/.codex")
+[ -d "$HOME/.config/gh" ] && mounts+=(-v "$HOME/.config/gh:/home/$RUSER/.config/gh:ro")
+[ -d "$HOME/.config/glab-cli" ] && mounts+=(-v "$HOME/.config/glab-cli:/home/$RUSER/.config/glab-cli:ro")
+[ -f "$HOME/.gitconfig" ] && mounts+=(-v "$HOME/.gitconfig:/home/$RUSER/.gitconfig:ro")
+[ -d "$HOME/.config/git" ] && mounts+=(-v "$HOME/.config/git:/home/$RUSER/.config/git:ro")
+[ -d "$HOME/.config/git-private" ] && mounts+=(-v "$HOME/.config/git-private:/home/$RUSER/.config/git-private:ro")
 
 # Claude project dir (per-folder convos + memory)
 mounts+=(-v "$PROJ:/home/$RUSER/.claude/projects/$KEY")
