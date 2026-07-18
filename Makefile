@@ -1,8 +1,11 @@
 build:
 	docker buildx bake --load
 
-setup: build
+setup:
 	./scripts/setup.sh
+
+uninstall:
+	rm -f $(HOME)/.local/bin/sandbox.sh
 
 shell: build
 	./scripts/sandbox.sh
@@ -13,4 +16,4 @@ claude: build
 pi: build
 	./scripts/sandbox.sh pi
 
-.PHONY: build setup shell claude pi
+.PHONY: build setup uninstall shell claude pi
