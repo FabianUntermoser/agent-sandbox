@@ -7,8 +7,8 @@
 </p>
 
 A standalone, network-firewalled dev container for running AI agents (Claude,
-pi, codex) or any command against `$PWD`. Everything baked into the image, no
-host symlinks.
+pi, codex) or any command against `$PWD`. You don't need to install anything on
+your machine - just run the container and it works in any project directory.
 
 ### Getting started
 
