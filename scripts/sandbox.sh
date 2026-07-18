@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
-# Throwaway, network-firewalled dev container for the current project.
-# Mounts $PWD at its real host path; runs any command (default: shell).
-# Dynamically resolves symlinks in $PWD and mounts their real targets.
+
+# USAGE: firewalled dev container for $PWD — mounts project, runs any command
 
 set -euo pipefail
 
@@ -18,20 +17,22 @@ help() {
 		  $prog ollama launch <agent> [--model <m>]   agent on local models
 		  --new                      force a fresh container
 		  -v, --verbose              run without tmux
-		  --build                    rebuild the image
 	EOF
 }
 
+## DEFAULTS
+
 IMAGE=agent-sandbox
 RUSER=node
-REPO_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+
+
+## ARGS
 
 FORCE_NEW=
 VERBOSE=
 while [ "$#" -gt 0 ]; do
 	case "$1" in
 		-h|--help) help; exit ;;
-		--build)   cd "$REPO_DIR" && docker buildx bake --load; exit ;;
 		--new)     FORCE_NEW=1; shift ;;
 		-v|--verbose) VERBOSE=1; shift ;;
 		--)        shift; break ;;
@@ -39,6 +40,8 @@ while [ "$#" -gt 0 ]; do
 		*)         break ;;
 	esac
 done
+
+## MAIN
 
 SESSION=${1:-shell}
 OLLAMA_PRELUDE='ollama serve >/tmp/ollama-serve.log 2>&1 & for i in $(seq 30); do ollama ps >/dev/null 2>&1 && break; sleep 0.3; done; exec '
@@ -50,7 +53,7 @@ case "${1:-}" in
 esac
 [ -z "$VERBOSE" ] && set -- tmux new-session -A -s "$SESSION" "$@"
 
-docker image inspect "$IMAGE" >/dev/null 2>&1 || { cd "$REPO_DIR" && docker buildx bake --load; }
+docker image inspect "$IMAGE" >/dev/null 2>&1 || die "image '$IMAGE' not found - run 'make build' in agent-sandbox repo"
 
 WORK=$PWD
 if [ "$WORK" = "$HOME" ] || [ -e "$WORK/.ssh" ] || [ -e "$WORK/.gnupg" ]; then
@@ -73,6 +76,10 @@ mounts=(-v "$WORK:$WORK")
 # Auth mounts
 [ -f "$HOME/.claude/.credentials.json" ] && mounts+=(-v "$HOME/.claude/.credentials.json:/home/$RUSER/.claude/.credentials.json")
 [ -d "$HOME/.pi" ] && mounts+=(-v "$HOME/.pi:/home/$RUSER/.pi")
+
+# Mount private pi config at real path so symlinks in ~/.pi/agent/ resolve
+pvt=$(readlink -f "$HOME/.pi/agent/models.json" 2>/dev/null) && pvt="${pvt%/models.json}"
+[ -d "$pvt" ] && mounts+=(-v "$pvt:$pvt:ro")
 [ -d "$HOME/.codex" ] && mounts+=(-v "$HOME/.codex:/home/$RUSER/.codex")
 [ -d "$HOME/.config/gh" ] && mounts+=(-v "$HOME/.config/gh:/home/$RUSER/.config/gh:ro")
 [ -d "$HOME/.config/glab-cli" ] && mounts+=(-v "$HOME/.config/glab-cli:/home/$RUSER/.config/glab-cli:ro")
@@ -91,11 +98,14 @@ while IFS= read -r -d '' link; do
 	[ -n "$target" ] && [ -e "$target" ] && mounts+=(-v "$target:$link") && SYMLINKS+=("$link -> $target")
 done < <(find "$WORK" -maxdepth 1 -type l -print0 2>/dev/null)
 
-echo "sandbox: $WORK" >&2
+echo -e "\e[1m${WORK##*/}\e[0m" >&2
 if [ ${#SYMLINKS[@]} -gt 0 ]; then
-	echo "" >&2
-	echo "[1] Resolving symlinks" >&2
-	for s in "${SYMLINKS[@]}"; do echo "  $s" >&2; done
+	echo -e "  \e[1msymlinks:\e[0m" >&2
+	for s in "${SYMLINKS[@]}"; do
+		# Strip WORK prefix from symlink path, show relative name
+		name="${s#"$WORK/"}"
+		echo "    $name" >&2
+	done
 fi
 echo "" >&2
 
