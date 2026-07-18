@@ -6,9 +6,7 @@
   <img alt="GitHub last commit" src="https://img.shields.io/github/last-commit/FabianUntermoser/agent-sandbox?color=blue&style=flat-square">
 </p>
 
-A standalone, network-firewalled dev container for running AI agents (Claude,
-pi, codex) or any command against `$PWD`. You don't need to install anything on
-your machine - just run the container and it works in any project directory.
+Sandbox container for AI agents (Claude, Codex, pi).
 
 ### Getting started
 
@@ -28,6 +26,9 @@ sandbox.sh --new          # force fresh container
 sandbox.sh --build        # rebuild image
 sandbox.sh -v npm test    # run without tmux
 sandbox.sh pytest         # any command
+
+Running `sandbox.sh` again in the same directory reattaches to the existing
+container (conversations persist). `--new` forces a fresh one.
 ```
 
 ### How it works
