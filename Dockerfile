@@ -12,7 +12,6 @@ ENV TZ="$TZ" \
     DEVCONTAINER=true \
     SHELL=/bin/zsh
 
-# ── Base ──────────────────────────────────────
 # git, zsh, tmux, vim, fzf, ripgrep, fd, jq, python3, pipx
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
@@ -23,22 +22,14 @@ apt-get install -y --no-install-recommends \
   less git procps sudo fzf zsh man-db unzip gnupg2 \
   ripgrep fd-find jq nano vim ffmpeg tmux \
   python3 python3-pip python3-venv pipx \
-  iptables ipset iproute2 dnsutils ca-certificates curl
+  iptables ipset iproute2 dnsutils ca-certificates curl \
+  bubblewrap gh zstd
 ln -s "$(command -v fdfind)" /usr/local/bin/fd
 rm -rf /var/lib/apt/lists/*
 EOT
 
-# ── codex ─────────────────────────────────────
-# bubblewrap: sandbox for codex subprocesses
-RUN apt-get install -y --no-install-recommends bubblewrap && rm -rf /var/lib/apt/lists/*
-
-# ── ollama ────────────────────────────────────
 RUN curl -fsSL https://ollama.com/install.sh | sh
 
-# ── gh (GitHub CLI) ───────────────────────────
-RUN apt-get install -y --no-install-recommends gh && rm -rf /var/lib/apt/lists/*
-
-# ── glab (GitLab CLI) ─────────────────────────
 RUN <<EOT
 set -eux
 curl -fsSL https://gitlab.com/gitlab-org/cli/-/releases/v1.50.0/downloads/glab_1.50.0_linux_amd64.tar.gz \
@@ -47,18 +38,19 @@ tar -xzf /tmp/glab.tar.gz -C /usr/local/bin bin/glab
 rm /tmp/glab.tar.gz
 EOT
 
-# ── acli (Anthropic CLI) ───────────────────────
 RUN <<EOT
 set -eux
-curl -fsSL https://github.com/anthropics/cli/releases/download/v0.1.0/acli-linux-amd64.tar.gz \
-  -o /tmp/acli.tar.gz
-tar -xzf /tmp/acli.tar.gz -C /usr/local/bin acli
-rm /tmp/acli.tar.gz
+curl -fsSL https://github.com/anthropics/anthropic-cli/releases/download/v1.16.0/ant_1.16.0_linux_amd64.tar.gz \
+  -o /tmp/ant.tar.gz
+tar -xzf /tmp/ant.tar.gz -C /usr/local/bin ant
+rm /tmp/ant.tar.gz
 EOT
+
+RUN curl -fsSL https://acli.atlassian.com/linux/latest/acli_linux_amd64/acli -o /usr/local/bin/acli \
+  && chmod +x /usr/local/bin/acli
 
 ARG USERNAME=node
 
-# ── Shell configs ─────────────────────────────
 COPY config/zshrc.local /home/$USERNAME/.zshrc.local
 COPY config/bashrc.local /home/$USERNAME/.bashrc.local
 COPY config/aliasrc /home/$USERNAME/.config/aliasrc
@@ -68,18 +60,17 @@ RUN chown $USERNAME:$USERNAME /home/$USERNAME/.zshrc.local /home/$USERNAME/.bash
   && echo '[ -f ~/.zshrc.local ] && source ~/.zshrc.local' >> /home/$USERNAME/.zshrc \
   && echo '[ -f ~/.bashrc.local ] && . ~/.bashrc.local' >> /home/$USERNAME/.bashrc
 
-# ── Claude settings ───────────────────────────
 COPY config/claude-settings.json /home/$USERNAME/.claude/settings.json
 RUN chown -R $USERNAME:$USERNAME /home/$USERNAME/.claude
 
-# ── Firewall + entrypoint ─────────────────────
 COPY scripts/init-firewall.sh /usr/local/bin/init-firewall.sh
-COPY scripts/sandbox-entry.sh /usr/local/bin/sandbox-entry.sh
-RUN chmod +x /usr/local/bin/init-firewall.sh /usr/local/bin/sandbox-entry.sh \
+COPY scripts/generate-allowlist.sh /tmp/generate-allowlist.sh
+RUN chmod +x /usr/local/bin/init-firewall.sh /tmp/generate-allowlist.sh \
+  && /tmp/generate-allowlist.sh > /etc/allowlist.sh \
+  && rm /tmp/generate-allowlist.sh \
   && echo "$USERNAME ALL=(root) NOPASSWD: /usr/local/bin/init-firewall.sh" > /etc/sudoers.d/init-firewall \
   && chmod 0440 /etc/sudoers.d/init-firewall
 
-# ── Agent CLIs ────────────────────────────────
 # claude: @anthropic-ai/claude-code
 # pi:     @earendil-works/pi-coding-agent
 # codex:  @openai/codex
@@ -92,5 +83,5 @@ RUN npm install -g @anthropic-ai/claude-code @earendil-works/pi-coding-agent @op
 
 USER $USERNAME
 WORKDIR /workspace
-ENTRYPOINT ["/usr/local/bin/sandbox-entry.sh"]
+ENTRYPOINT ["/bin/bash", "-c", "sudo /usr/local/bin/init-firewall.sh && exec \"$@\"", "bash"]
 CMD ["zsh"]
