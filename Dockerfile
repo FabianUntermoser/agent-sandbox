@@ -83,5 +83,5 @@ RUN npm install -g @anthropic-ai/claude-code @earendil-works/pi-coding-agent @op
 
 USER $USERNAME
 WORKDIR /workspace
-ENTRYPOINT ["/bin/bash", "-c", "sudo /usr/local/bin/init-firewall.sh && exec \"$@\"", "bash"]
+ENTRYPOINT ["/bin/bash", "-c", "exec \"$@\"", "bash"]
 CMD ["zsh"]

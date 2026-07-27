@@ -29,6 +29,9 @@ ALLOWED_DOMAINS=(
   joaia.atlassian.net
   ollama.com
   registry.ollama.ai
+  api.ollama.ai
+  mcp.linear.app
+  mcp.posthog.com
 )
 
 for domain in "${ALLOWED_DOMAINS[@]}"; do
