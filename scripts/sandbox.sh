@@ -59,7 +59,7 @@ case "${1:-}" in
 	"")        set -- zsh ;;
 	claude)    set -- claude --dangerously-skip-permissions "${@:2}" ;;
 	pi)        set -- bash -c "export PATH=\$HOME/.npm-global/bin:\$PATH; exec pi" ;;
-	ollama)    set -- bash -c "export PATH=\$HOME/.npm-global/bin:\$PATH; exec \$@" bash "${@:2}" ;;
+	ollama)    set -- bash -c 'export PATH=$HOME/.npm-global/bin:$PATH; exec ollama "$@"' bash "${@:2}" ;;
 esac
 [ -z "$VERBOSE" ] && set -- tmux new-session -A -s "$SESSION" "$@"
 
