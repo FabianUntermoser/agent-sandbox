@@ -10,17 +10,21 @@ Sandbox container for AI agents (Claude, Codex, pi).
   in-container.
 - **Baked-in configs** — shell, tmux, aliasrc, claude settings, CLIs (ollama,
   glab, ant, acli) are in the image, not mounted from host.
-- **Auth-only mounts** — only claude credentials, pi, codex, gh, glab, git
-  config are mounted from host. Everything else is self-contained.
-- **Network firewalled** — default-deny egress, allowlisted domains only
-  (Anthropic, GitHub, GitLab, npm, PyPI, ollama, …).
+- **Auth-only mounts** — only agent configs (claude, pi, codex) and git auth
+  are mounted from host. Everything else is self-contained.
+- **Manifest-driven** — per-project `.sandbox.conf` controls which agents and
+  mounts are enabled. Defaults work for most projects.
+- **Skill merge** — `.agents/skills/` skills are merged into pi's skill
+  directory so pi discovers all skills (worknotes, blog, etc.).
+- **Default network: host** — uses `--network=host` for direct host ollama
+  access (already authenticated). No firewall in default mode.
+- **`--offline` mode** — restricts network to allowlisted domains only
+  (Anthropic, GitHub, GitLab, npm, PyPI, ollama, …). Uses Docker bridge
+  network + firewall.
 - **Works in any directory** — mounts at real host path so Claude `--resume`
   and project keys match between host and container.
-- **Startup log** — prints project dir and any resolved symlinks.
 
 ## Usage
-
-### Getting started
 
 **Prerequisites:** Docker with BuildKit, Linux with iptables.
 
@@ -37,22 +41,34 @@ make claude                # Claude Code
 make pi                    # pi coding agent
 
 # or use the script directly
-sandbox.sh --new
-
-# start an agent
 sandbox.sh claude --dangerously-skip-permissions
 sandbox.sh codex
 sandbox.sh pi
-sandbox.sh ollama launch claude
+sandbox.sh ollama launch claude   # ollama-managed agent launch
+sandbox.sh --offline pi            # restricted network, no cloud models
 ```
 
 Running `sandbox.sh` again in the same directory reattaches to the existing
 container. `--new` forces a fresh one.
 
-### Environment
+## Per-project manifest
 
-- `SANDBOX_REPO` — path to agent-sandbox repo (default: `~/repos/dots/agent-sandbox`)
+Drop a `.sandbox.conf` in any project to override defaults:
 
-### License
+```bash
+# .sandbox.conf — sourced by sandbox.sh (bash syntax)
+
+# Agents to enable (space-separated, empty to disable)
+AGENTS="pi claude codex"
+
+# Additional bind mounts: "src:dest" per line
+MOUNTS=(
+  # "/host/path:/container/path"
+)
+```
+
+No manifest = all defaults (pi + claude + codex, git auth, skill merge).
+
+## License
 
 MIT
