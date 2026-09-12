@@ -16,4 +16,25 @@ claude: build
 pi: build
 	./scripts/sandbox.sh pi
 
-.PHONY: build setup uninstall shell claude pi
+vm-create:
+	./vm/vworker.sh create
+
+vm-start:
+	./vm/vworker.sh start
+
+vm-stop:
+	./vm/vworker.sh stop
+
+vm-status:
+	./vm/vworker.sh status
+
+vm-sync:
+	./vm/vworker.sh sync
+
+vm-pair:
+	./vm/vworker.sh pair-vault
+
+vm-destroy:
+	./vm/vworker.sh destroy --yes
+
+.PHONY: build setup uninstall shell claude pi vm-create vm-start vm-stop vm-status vm-sync vm-pair vm-destroy

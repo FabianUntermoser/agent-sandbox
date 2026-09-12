@@ -51,6 +51,18 @@ sandbox.sh --offline pi            # restricted network, no cloud models
 Running `sandbox.sh` again in the same directory reattaches to the existing
 container. `--new` forces a fresh one.
 
+## VM worker
+
+`vm/` boots a full Debian guest with the same tooling when a container is not enough:
+its own kernel for docker and devcontainers, real `sudo`, a tailnet node of its own, and
+a vault checkout it can write to. See [vm/README.md](vm/README.md).
+
+```sh
+make vm-create     # boot and provision the worker
+make vm-pair       # share the vault folder with it
+make vm-status
+```
+
 ## Per-project manifest
 
 Drop a `.sandbox.conf` in any project to override defaults:

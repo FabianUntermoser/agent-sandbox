@@ -1,0 +1,57 @@
+#cloud-config
+hostname: __HOSTNAME__
+manage_etc_hosts: true
+ssh_pwauth: false
+disable_root: true
+
+users:
+  - name: __VM_USER__
+    gecos: Agent Worker
+    groups: [sudo, adm]
+    sudo: "ALL=(ALL) NOPASSWD:ALL"
+    shell: /bin/bash
+    lock_passwd: true
+    ssh_authorized_keys:
+      - __SSH_PUBKEY__
+
+package_update: true
+packages:
+  - ca-certificates
+  - curl
+  - git
+  - jq
+  - ripgrep
+  - tmux
+  - zsh
+  - fzf
+  - unzip
+  - rsync
+  - build-essential
+  - python3
+  - python3-pip
+  - python3-venv
+  - pipx
+  - docker.io
+  - syncthing
+  - gh
+
+write_files:
+  # npm globals live outside /usr so the agent-owned CLIs can self-update
+  # (node comes from the official tarball: pi needs 22+, trixie ships 20)
+  - path: /etc/npmrc
+    permissions: '0644'
+    content: |
+      prefix=/usr/local/share/npm-global
+  - path: /etc/profile.d/npm-global.sh
+    permissions: '0644'
+    content: |
+      export PATH=/usr/local/share/npm-global/bin:$PATH
+  - path: /usr/local/sbin/vworker-provision-system.sh
+    permissions: '0755'
+    content: |
+      __SYSTEM_SCRIPT__
+
+runcmd:
+  - [bash, -lc, /usr/local/sbin/vworker-provision-system.sh]
+
+final_message: "vworker guest up after $UPTIME seconds"
