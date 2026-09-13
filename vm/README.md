@@ -1,10 +1,14 @@
 # vworker
 
 A QEMU VM that boots a Debian 13 guest preloaded like the host machine: pi, docker,
-devcontainers, gh/glab, syncthing, tailscale, and a vault checkout it can write to.
+devcontainers, gh/glab, syncthing, tailscale.
 
-Use it when a sandbox container is not enough: the worker owns its kernel, so docker
-runs natively, `sudo` is real, and it can join the tailnet as its own node.
+The worker is an isolated sandbox. It shares exactly one folder with the host, an empty
+one made for it. It has no share of the vault and no path to the host filesystem. A
+sendreceive peer can delete what it sees, so nothing worth keeping goes in that folder.
+
+Use it when a sandbox container is not enough: the worker owns its kernel, so docker runs
+natively, `sudo` is real, and it can join the tailnet as its own node.
 
 ## Host prerequisites
 
@@ -14,13 +18,13 @@ runs natively, `sudo` is real, and it can join the tailnet as its own node.
 
 ```sh
 vm/vworker.sh create
-vm/vworker.sh pair-vault
+vm/vworker.sh pair-sandbox
 ```
 
-`create` downloads the Debian genericcloud image once, makes an overlay disk, boots it
-with a cloud-init seed, waits for first-boot provisioning, then pushes host state.
-`pair-vault` adds the guest as a device to the host syncthing config and shares the
-vault folder with it.
+`create` downloads the Debian genericcloud image into `~/.local/share/vworker/base.qcow2`
+(kept across `destroy`), makes an overlay disk, boots it with a cloud-init seed, waits for
+first-boot provisioning, then pushes host state. `pair-sandbox` creates the worker's own
+folder in the host syncthing config and shares it with that one worker.
 
 ## Commands
 
@@ -31,12 +35,13 @@ vault folder with it.
 | `status` | running state plus guest summary |
 | `ssh [cmd]` | shell or one-off command in the guest |
 | `sync` | re-push pi/gh/glab/git config and re-run user provisioning |
-| `pair-vault [addr]` | pair syncthing with the host, share the vault folder |
+| `pair-sandbox [addr]` | pair syncthing with the host, share the worker's sandbox folder |
 | `logs [n]` | serial console tail |
 | `destroy --yes` | delete the VM directory |
 
 Config lives in `~/.config/vworker/config` (`VM_RAM`, `VM_DISK`, `VM_CPUS`, `OLLAMA_BASE`,
-`VM_NAME`, ...), secrets in `~/.config/vworker/secrets.env` (`TS_AUTHKEY`, `TS_HOSTNAME`).
+`VM_NAME`, `SANDBOX_HOST_PATH`, `SANDBOX_FOLDER_ID`, ...), secrets in
+`~/.config/vworker/secrets.env` (`TS_AUTHKEY`, `TS_HOSTNAME`).
 
 ## How it fits together
 
@@ -47,8 +52,8 @@ Config lives in `~/.config/vworker/config` (`VM_RAM`, `VM_DISK`, `VM_CPUS`, `OLL
 - `guest/provision-system.sh` runs as root once: docker, node, pi + devcontainer, glab,
   tailscale, syncthing user service, then writes `/var/lib/vworker/system-ok`.
 - `guest/provision-user.sh` runs on every `create` and `sync` as root on the guest user's
-  behalf: shell, pi provider endpoint, MCP pruning, git config, tailscale join, syncthing
-  folder, `.stignore`.
+  behalf: shell, pi provider endpoint, MCP pruning, git config, tailscale join, the sandbox
+  folder.
 - `vworker.sh` is the driver and lives on the host only.
 
 Ollama stays on the host. QEMU user networking maps `10.0.2.2` to the host loopback, so
@@ -58,36 +63,55 @@ to `127.0.0.1`. The same address works on any host, local or remote.
 Port forwards: `127.0.0.1:2222` to guest 22, `127.0.0.1:22002` to guest 22000 (syncthing).
 The host keeps 22000 for itself.
 
-## Vault sync
+## The sandbox folder
 
-The guest folder is `sendreceive`, so notes written in the VM land in the vault and notes
-edited on the host land in the VM. `~/notes` in the guest is a symlink into
-`~/syncthing/Files/notes`.
+| Side | Path | Folder id |
+| --- | --- | --- |
+| host | `~/vworker` (`SANDBOX_HOST_PATH`) | `vworker` (`SANDBOX_FOLDER_ID`) |
+| guest | `~/sandbox` | `vworker` |
 
-The guest `.stignore` is a deny list, because whitelisting a subdirectory is impossible in
-syncthing: re-including a directory drags its whole subtree in. Denied: `devices`,
-`keepass`, `scripts`, `bruno`, `notes/.git`, `notes/.obsidian`, `notes/res`,
-`notes/4ARCHIVE`, `notes/Clippings`, `notes/PUBLIC`, `notes/node_modules`. The worker sees
-`notes/work`, `notes/3NOTES`, and the rest of the vault, about 56 MB.
+Type is `sendreceive` on both sides and the device list holds exactly two entries: the host
+and that worker. Files dropped in `~/vworker` land in the guest's `~/sandbox` and the other
+way round, so the worker can hand results back. The host side has staggered versioning, so
+a file the worker deletes is stashed in `~/vworker/.stversions`.
 
-### Do not wipe the guest syncthing index
+Rules that keep this safe:
 
-`2026-09-13`: wiping the guest DB while the folder was `sendreceive` gave the guest a fresh
-index ID, the host read that as "the worker deleted everything", and applied 261 deletions
-to the vault. 224 were git-tracked and restored with `git checkout`. The rest were 18
-`.git` internals and 6 Cryptomator stubs.
+- The sandbox holds disposable work only. Never put anything in `~/vworker` that you would
+  not be fine losing.
+- Never add the vault folder to a worker. If the worker needs vault content, copy the file
+  in.
+- One folder per worker. Two workers, two folders, so a reset worker can only ever claim
+  about its own sandbox.
 
-To re-pull from scratch: set the guest folder to `receiveonly`, wipe, then set it back.
-Never delete the index in `sendreceive` mode.
+### Why the worker does not get the vault
+
+`2026-09-13`: the first version of this VM shared the vault as `sendreceive` and used a
+deny list to thin it out. While iterating on that list the guest syncthing index was wiped.
+A wiped index gives the device a new generation, so its "I do not have this file" claims
+beat the other devices' versions and the host applied 261 deletions to the vault. 224 files
+were git-tracked and came back with `git checkout`. 18 `.git` internals and 6 Cryptomator
+stubs were not tracked and were lost. Syncthing refuses to delete a non-empty directory
+whose contents the remote ignores, and that guard is the only reason whole directories
+survived.
+
+The deny list was the wrong tool. A worker that must never touch real data does not get a
+share of it at all.
+
+## Syncthing rules
+
+- Never delete a peer's index while the folder is `sendreceive`. Set the folder
+  `receiveonly` first, wipe, then set it back.
+- Keep `~/sandbox/.stfolder` in place. Without that marker syncthing refuses to scan the
+  folder and reports `folder marker missing`.
+- The local `.stignore` never travels. It cannot protect the other side.
+
+To re-pull a sandbox from scratch:
 
 ```sh
-# on the guest, K from ~/.local/state/syncthing/config.xml
 curl -X PATCH -H "X-API-Key: $K" -H 'Content-Type: application/json' \
-  -d '{"paused":true}' http://127.0.0.1:8384/rest/config/folders/jcuvm-8t2nt
+  -d '{"paused":true}' http://127.0.0.1:8384/rest/config/folders/vworker
 ```
-
-Keep `~/syncthing/Files/.stfolder` in place. Without that marker syncthing refuses to scan
-the folder and reports `folder marker missing`.
 
 ## Authentication state
 
@@ -112,9 +136,10 @@ Set `TS_AUTHKEY` (a reusable, tagged key, for example `tag:vworker`) in
 
 ## Running on another host
 
-The script is host-agnostic: clone the repo on the target machine, `vworker create`, then
-`vworker pair-vault <tailnet-address>:22000` using the address the guest can reach the
-vault host on. The image URL is amd64 only; override `IMAGE_URL` for arm64.
+The script is host-agnostic. Clone the repo on the target machine, then run the same two
+commands. For a worker that reaches its host over a tailnet, pass the address:
+`vworker pair-sandbox <tailnet-address>:22000`. The image URL is amd64 only; override
+`IMAGE_URL` for arm64.
 
 ## Troubleshooting
 
@@ -126,4 +151,4 @@ vm/vworker.sh ssh 'systemctl --user status syncthing'
 
 Guest syncthing REST: read the key with
 `sed -n 's:.*<apikey>\([^<]*\)</apikey>.*:\1:p' ~/.local/state/syncthing/config.xml`, then
-query `http://127.0.0.1:8384/rest/db/status?folder=jcuvm-8t2nt`.
+query `http://127.0.0.1:8384/rest/db/status?folder=vworker`.

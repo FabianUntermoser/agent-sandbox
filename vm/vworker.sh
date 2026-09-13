@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 
-# USAGE: vworker - boot and drive a QEMU worker VM preloaded like this machine (pi, docker, devcontainer, gh/glab, syncthing, tailscale)
+# USAGE: vworker - boot a QEMU worker VM and hand it an isolated synced sandbox (pi, docker, devcontainer, gh/glab, syncthing, tailscale)
+
+# The worker shares exactly one folder with the host and never sees the vault:
+# keep real data out of the sandbox, the worker can write and delete inside it.
 
 set -euo pipefail
 
@@ -28,10 +31,14 @@ SSH_PORT="${SSH_PORT:-2222}"
 SYNC_PORT="${SYNC_PORT:-22002}"
 SSH_KEY="${SSH_KEY:-$HOME/.ssh/vworker_ed25519}"
 IMAGE_URL="${IMAGE_URL:-https://cloud.debian.org/images/cloud/trixie/latest/debian-13-genericcloud-amd64.qcow2}"
+# cache the cloud image outside VM_HOME so 'vworker destroy' keeps it
+BASE_IMAGE="${BASE_IMAGE:-${XDG_DATA_HOME:-$HOME/.local/share}/vworker/base.qcow2}"
 # the guest reaches the host's loopback through QEMU user networking, so the host keeps
 # ollama bound to 127.0.0.1 and the same address works on any remote host
 OLLAMA_BASE="${OLLAMA_BASE:-http://10.0.2.2:11434/v1}"
-VAULT_FOLDER_ID="${VAULT_FOLDER_ID:-jcuvm-8t2nt}"
+# the worker's only share: a dedicated throwaway folder, never the vault
+SANDBOX_FOLDER_ID="${SANDBOX_FOLDER_ID:-vworker}"
+SANDBOX_HOST_PATH="${SANDBOX_HOST_PATH:-$HOME/vworker}"
 SYNC_HOST_DEVICE_ID="${SYNC_HOST_DEVICE_ID:-}"
 SYNC_HOST_ADDRESS="${SYNC_HOST_ADDRESS:-}"
 SSH_PUBKEY=""
@@ -74,10 +81,11 @@ ssh_pubkey(){
 }
 
 base_image(){
-	[ -f "$VM_HOME/base.qcow2" ] && return
+	[ -f "$BASE_IMAGE" ] && return
+	install -d "$(dirname "$BASE_IMAGE")"
 	info "downloading ${IMAGE_URL##*/}"
-	curl -fL -sS -o "$VM_HOME/base.qcow2.part" "$IMAGE_URL"
-	mv "$VM_HOME/base.qcow2.part" "$VM_HOME/base.qcow2"
+	curl -fL -sS -o "$BASE_IMAGE.part" "$IMAGE_URL"
+	mv "$BASE_IMAGE.part" "$BASE_IMAGE"
 }
 
 seed_image(){
@@ -166,7 +174,7 @@ cmd_create(){
 	install -d "$VM_HOME"
 	base_image
 	info "creating disk $VM_DISK"
-	qemu-img create -q -f qcow2 -F qcow2 -b "$VM_HOME/base.qcow2" "$VM_HOME/disk.qcow2" "$VM_DISK" >/dev/null
+	qemu-img create -q -f qcow2 -F qcow2 -b "$BASE_IMAGE" "$VM_HOME/disk.qcow2" "$VM_DISK" >/dev/null
 	seed_image
 	info "booting $VM_NAME"
 	qemu_launch
@@ -222,7 +230,7 @@ cmd_sync(){
 	# one env file carries everything the guest needs, secrets included
 	{
 		printf 'OLLAMA_BASE=%q\n' "$OLLAMA_BASE"
-		printf 'VAULT_FOLDER_ID=%q\n' "$VAULT_FOLDER_ID"
+		printf 'SANDBOX_FOLDER_ID=%q\n' "$SANDBOX_FOLDER_ID"
 		printf 'SYNC_HOST_DEVICE_ID=%q\n' "$SYNC_HOST_DEVICE_ID"
 		printf 'SYNC_HOST_ADDRESS=%q\n' "$SYNC_HOST_ADDRESS"
 		[ -n "${TS_AUTHKEY:-}" ] && printf 'TS_AUTHKEY=%q\n' "$TS_AUTHKEY"
@@ -233,9 +241,9 @@ cmd_sync(){
 	gssh "chmod 600 ~/.vworker-secrets.env 2>/dev/null; sudo -n bash /tmp/vworker-provision-user.sh"
 }
 
-cmd_pair_vault(){ # cmd_pair_vault [host-address-for-guest]
+cmd_pair_sandbox(){ # cmd_pair_sandbox [host-address-for-guest]
 	running || die "$VM_NAME not running"
-	local addr="${1:-10.0.2.2:22000}" guest_id my_id
+	local addr="${1:-10.0.2.2:22000}" guest_id my_id devices
 	# sync first: the guest writes its syncthing id during user provisioning
 	cmd_sync
 	guest_id="$(gssh cat .vworker-id 2>/dev/null | tr -d '\r' || true)"
@@ -243,24 +251,32 @@ cmd_pair_vault(){ # cmd_pair_vault [host-address-for-guest]
 	my_id="$(host_st_api http://127.0.0.1:8384/rest/system/status | jq -r .myID)"
 	[ -n "$my_id" ] || die "could not read the host syncthing id"
 
+	install -d "$SANDBOX_HOST_PATH/.stfolder"
+	info "sandbox folder on the host: $SANDBOX_HOST_PATH"
+
 	info "allowing $VM_NAME ($guest_id) into the host syncthing config"
 	host_st_api -X PUT -H 'Content-Type: application/json' \
 		"http://127.0.0.1:8384/rest/config/devices/$guest_id" \
 		-d "$(jq -n --arg id "$guest_id" --arg name "$VM_NAME" --arg a "tcp://127.0.0.1:$SYNC_PORT" \
 			'{deviceID:$id,name:$name,addresses:[$a],compression:"metadata"}')"
 
-	info "sharing folder $VAULT_FOLDER_ID with the worker"
+	# the folder holds this worker and nothing else: no vault, no other devices
+	devices="$(jq -n --arg me "$my_id" --arg guest "$guest_id" '[{deviceID:$me},{deviceID:$guest}]')"
+	info "creating folder $SANDBOX_FOLDER_ID, shared with the worker only"
 	host_st_api -X PUT -H 'Content-Type: application/json' \
-		"http://127.0.0.1:8384/rest/config/folders/$VAULT_FOLDER_ID" \
-		-d "$(host_st_api "http://127.0.0.1:8384/rest/config/folders/$VAULT_FOLDER_ID" \
-			| jq --arg id "$guest_id" '.devices += [{deviceID:$id}]')"
+		"http://127.0.0.1:8384/rest/config/folders/$SANDBOX_FOLDER_ID" \
+		-d "$(jq -n --arg id "$SANDBOX_FOLDER_ID" --arg path "$SANDBOX_HOST_PATH" --argjson dev "$devices" \
+			'{id:$id,label:"vworker sandbox",path:$path,type:"sendreceive",devices:$dev,fsWatcherEnabled:true,rescanIntervalS:3600,
+			  versioning:{type:"staggered",params:{maxAge:"7776000"},cleanupIntervalS:3600}}')" \
+		|| die "could not create the sandbox folder"
 
+	set_cfg SANDBOX_FOLDER_ID "$SANDBOX_FOLDER_ID"
 	set_cfg SYNC_HOST_DEVICE_ID "$my_id"
 	set_cfg SYNC_HOST_ADDRESS "$addr"
 	SYNC_HOST_DEVICE_ID="$my_id"
 	SYNC_HOST_ADDRESS="$addr"
 	cmd_sync
-	info "paired: worker holds notes/work + notes/3NOTES only (see ~/.stignore in the guest)"
+	info "paired: the worker sees only ~/sandbox, the vault is not shared with it"
 }
 
 cmd_ssh(){
@@ -309,13 +325,15 @@ cmd_help(){
   vworker status     running state + guest summary
   vworker ssh [cmd]  shell or one-off command in the worker
   vworker sync       re-push pi/gh/glab/git config and re-run user provisioning
-  vworker pair-vault [host-address]   pair syncthing with the host and share the vault
-                     (default host-address 10.0.2.2:22000 for the local QEMU worker,
-                      use tcp://host:22000 style address on a tailnet)
+  vworker pair-sandbox [host-address]
+                     pair syncthing with the host and share the worker's own sandbox
+                     folder, nothing else (default host-address 10.0.2.2:22000 for the
+                     local QEMU worker, use host:22000 on a tailnet)
   vworker logs [n]   serial console tail
   vworker destroy --yes
 
-Config:  ~/.config/vworker/config   (VM_RAM, VM_DISK, VM_NAME, OLLAMA_BASE, ...)
+Config:  ~/.config/vworker/config   (VM_RAM, VM_DISK, VM_NAME, OLLAMA_BASE,
+                                    SANDBOX_HOST_PATH, SANDBOX_FOLDER_ID, ...)
 Secrets: ~/.config/vworker/secrets.env  (TS_AUTHKEY, SYNC_HOST_DEVICE_ID, SYNC_HOST_ADDRESS)
 EOF
 }
@@ -329,7 +347,7 @@ case "${1:-help}" in
 	restart) cmd_stop; cmd_start ;;
 	status) cmd_status ;;
 	ssh) shift; cmd_ssh "$@" ;;
-	pair-vault) shift; cmd_pair_vault "$@" ;;
+	pair-sandbox) shift; cmd_pair_sandbox "$@" ;;
 	sync) cmd_sync ;;
 	logs) shift; cmd_logs "${1:-40}" ;;
 	destroy) shift; cmd_destroy "${1:-}" ;;

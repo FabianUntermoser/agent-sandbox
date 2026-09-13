@@ -13,7 +13,7 @@ HOME_DIR=/home/$VM_USER
 [ -f "$HOME_DIR/.vworker-secrets.env" ] && . "$HOME_DIR/.vworker-secrets.env"
 
 OLLAMA_BASE="${OLLAMA_BASE:-http://10.0.2.2:11434/v1}"
-VAULT_FOLDER_ID="${VAULT_FOLDER_ID:-}"
+SANDBOX_FOLDER_ID="${SANDBOX_FOLDER_ID:-}"
 SYNC_HOST_DEVICE_ID="${SYNC_HOST_DEVICE_ID:-}"
 SYNC_HOST_ADDRESS="${SYNC_HOST_ADDRESS:-}"
 
@@ -119,46 +119,25 @@ if runuser -u "$VM_USER" -- env XDG_RUNTIME_DIR="/run/user/$(id -u "$VM_USER")" 
 					'{deviceID:$id,name:"host",addresses:[$addr],compression:"metadata"}')" || warn "device add failed"
 		fi
 
-		if [ -n "$VAULT_FOLDER_ID" ]; then
-			info "vault folder $VAULT_FOLDER_ID -> ~/syncthing/Files"
-			install -d -o "$VM_USER" -g "$VM_USER" "$HOME_DIR/syncthing"
-			install -d -o "$VM_USER" -g "$VM_USER" "$HOME_DIR/syncthing/Files"
-			# same layout as the host: ~/notes points at the notes subpath of the shared folder
-			if [ -L "$HOME_DIR/notes" ]; then
-				:
-			elif rmdir "$HOME_DIR/notes" 2>/dev/null || [ ! -e "$HOME_DIR/notes" ]; then
-				ln -s syncthing/Files/notes "$HOME_DIR/notes"
-			else
-				warn "$HOME_DIR/notes is a non-empty directory, leaving it alone"
-			fi
-			chown -h "$VM_USER:$VM_USER" "$HOME_DIR/notes" 2>/dev/null || true
-			# syncthing cannot whitelist a subdirectory: re-including a directory drags its
-			# whole subtree in, so the worker gets the note tree minus the heavy and
-			# private parts (git history, obsidian cache, attachments, device dumps).
-			cat >"$HOME_DIR/syncthing/Files/.stignore" <<'EOF'
-devices
-keepass
-scripts
-bruno
-notes/.git
-notes/.obsidian
-notes/res
-notes/4ARCHIVE
-notes/Clippings
-notes/PUBLIC
-notes/node_modules
-EOF
-			chown "$VM_USER:$VM_USER" "$HOME_DIR/syncthing/Files/.stignore"
+		if [ -n "$SANDBOX_FOLDER_ID" ]; then
+			# the worker gets exactly one folder and it is empty by design: no vault,
+			# no real data. Never widen this to a folder that holds something worth
+			# keeping, a sendreceive peer can delete what it sees.
+			info "sandbox folder $SANDBOX_FOLDER_ID -> ~/sandbox"
+			install -d -o "$VM_USER" -g "$VM_USER" "$HOME_DIR/sandbox"
 			# the folder marker: without it syncthing refuses to scan (data loss guard)
-			install -d -o "$VM_USER" -g "$VM_USER" "$HOME_DIR/syncthing/Files/.stfolder"
+			install -d -o "$VM_USER" -g "$VM_USER" "$HOME_DIR/sandbox/.stfolder"
 			devices="$(jq -n --arg me "$my_id" --arg host "$SYNC_HOST_DEVICE_ID" \
 				'[{deviceID:$me}] + (if $host == "" then [] else [{deviceID:$host}] end)')"
 			rest -X PUT -H 'Content-Type: application/json' \
-				"http://127.0.0.1:8384/rest/config/folders/$VAULT_FOLDER_ID" \
-				-d "$(jq -n --arg id "$VAULT_FOLDER_ID" --arg path "$HOME_DIR/syncthing/Files" --argjson dev "$devices" \
-					'{id:$id,label:"vault",path:$path,type:"sendreceive",devices:$dev,fsWatcherEnabled:true,rescanIntervalS:3600,
-					  versioning:{type:"staggered",params:{maxAge:"7776000"},cleanupIntervalS:3600}}')" \
+				"http://127.0.0.1:8384/rest/config/folders/$SANDBOX_FOLDER_ID" \
+				-d "$(jq -n --arg id "$SANDBOX_FOLDER_ID" --arg path "$HOME_DIR/sandbox" --argjson dev "$devices" \
+					'{id:$id,label:"sandbox",path:$path,type:"sendreceive",devices:$dev,fsWatcherEnabled:true,rescanIntervalS:3600}')" \
 				|| warn "folder add failed"
+			# syncthing ships an unused 'default' folder (~/Sync) in a fresh config;
+			# the worker holds exactly one folder
+			rest -X DELETE "http://127.0.0.1:8384/rest/config/folders/default" >/dev/null 2>&1 || true
+			rmdir "$HOME_DIR/Sync" 2>/dev/null || true
 		fi
 	fi
 else
@@ -173,3 +152,4 @@ printf '  devcontainer:%s\n' "$(runuser -u "$VM_USER" -- bash -lc 'command -v de
 printf '  docker:      %s\n' "$(docker --version 2>/dev/null || echo missing)"
 printf '  ollama:      %s\n' "$(curl -fsS --max-time 5 "${OLLAMA_BASE%/v1}/api/version" 2>/dev/null | jq -r .version || echo unreachable)"
 printf '  tailscale:   %s\n' "$(tailscale ip -4 2>/dev/null | head -1 || echo not-joined)"
+printf '  folders:     %s\n' "$(runuser -u "$VM_USER" -- bash -c 'K=$(sed -n "s:.*<apikey>\([^<]*\)</apikey>.*:\1:p" ~/.local/state/syncthing/config.xml); curl -fsS -H "X-API-Key: $K" http://127.0.0.1:8384/rest/config/folders | jq -r "[.[].id] | join(\", \")"' 2>/dev/null || echo unknown)"

@@ -32,7 +32,7 @@ vm-sync:
 	./vm/vworker.sh sync
 
 vm-pair:
-	./vm/vworker.sh pair-vault
+	./vm/vworker.sh pair-sandbox
 
 vm-destroy:
 	./vm/vworker.sh destroy --yes

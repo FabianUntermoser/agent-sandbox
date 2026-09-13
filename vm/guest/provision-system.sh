@@ -15,7 +15,7 @@ MARKER=/var/lib/vworker/system-ok
 ## USER LAYOUT
 
 info "user layout for $VM_USER"
-install -d -o "$VM_USER" -g "$VM_USER" /home/"$VM_USER"/{repos,notes,work}
+install -d -o "$VM_USER" -g "$VM_USER" /home/"$VM_USER"/{repos,work}
 install -d -o "$VM_USER" -g "$VM_USER" /usr/local/share/npm-global
 usermod -aG docker,sudo "$VM_USER"
 

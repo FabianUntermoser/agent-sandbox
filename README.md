@@ -54,12 +54,13 @@ container. `--new` forces a fresh one.
 ## VM worker
 
 `vm/` boots a full Debian guest with the same tooling when a container is not enough:
-its own kernel for docker and devcontainers, real `sudo`, a tailnet node of its own, and
-a vault checkout it can write to. See [vm/README.md](vm/README.md).
+its own kernel for docker and devcontainers, real `sudo`, a tailnet node of its own. The
+worker is isolated: it gets its own empty synced folder and never a share of the vault. See
+[vm/README.md](vm/README.md).
 
 ```sh
 make vm-create     # boot and provision the worker
-make vm-pair       # share the vault folder with it
+make vm-pair       # share the worker's own sandbox folder with it
 make vm-status
 ```
 
