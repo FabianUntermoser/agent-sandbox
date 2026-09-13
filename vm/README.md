@@ -37,7 +37,7 @@ folder in the host syncthing config and shares it with that one worker.
 | `sync` | re-push pi/gh/glab/git config and re-run user provisioning |
 | `pair-sandbox [addr]` | pair syncthing with the host, share the worker's sandbox folder |
 | `logs [n]` | serial console tail |
-| `destroy --yes` | delete the VM directory |
+| `destroy --yes` | delete the VM directory and drop its syncthing device from the host |
 
 Config lives in `~/.config/vworker/config` (`VM_RAM`, `VM_DISK`, `VM_CPUS`, `OLLAMA_BASE`,
 `VM_NAME`, `SANDBOX_HOST_PATH`, `SANDBOX_FOLDER_ID`, ...), secrets in
@@ -116,20 +116,28 @@ curl -X PATCH -H "X-API-Key: $K" -H 'Content-Type: application/json' \
 ## Authentication state
 
 Copied from the host: pi config (models, settings, AGENTS.md, mcp.json), `gh` and `glab`
-config, git config. MCP servers pinned to host-only paths are pruned at provisioning time.
+config, git config, ssh `known_hosts` and a sanitized `ssh/config`. MCP servers pinned to
+host-only paths are pruned at provisioning time.
 
 `gh` is logged in without any extra step: every `create` and `sync` reads the host token
 (`gh auth token`, from the host keyring) and pipes it through ssh stdin into
 `gh auth login --with-token` inside the guest. The token is never written to a file on the
 host. `vworker ssh 'gh auth status'` shows the copied token, `gh api user` works.
 
-Still manual, because no usable credential exists to copy:
+`glab` is logged in for every host whose credential can work in a guest. The config is
+rebuilt at provisioning time and keeps only hosts with a plaintext token; OAuth grants
+(they cannot be refreshed in a guest) and keyring-only entries are left out, so no unusable
+secret is copied and `glab auth status` exits clean. Verified: `glab api user` returns the
+account, `glab api projects` lists 57 projects.
 
-- `glab`: the host `gitlab.com` token is an OAuth refresh token that is already rotated, so
-  the host itself fails with `invalid_grant` and there is nothing to copy. Log in inside the
-  guest (`glab auth login` device flow), or paste a PAT with `--token`.
-- git over SSH: the guest has no private key. Either add a new key (`ssh-keygen` in the
-  guest, add the public half to GitHub/GitLab) or allow agent forwarding when connecting.
+Git over SSH needs no key in the worker. `vworker ssh` forwards the host ssh-agent (`ssh -A`),
+so clones and pushes inside the worker use your laptop's keys while the connection is open.
+The guest keeps only public material: `known_hosts`, and a copy of the host `ssh/config` with
+`IdentitiesOnly` and `IdentityFile` lines removed, because those pins name key files the guest
+does not have and would stop it from offering the agent's keys. Verified from inside a worker:
+`ssh -T git@github.com` greets the account, and shallow clones of a private GitHub repo and of
+`gitlab.untermoser.synology.me:server/nextcloud-config` both land on disk. Add keys to the
+agent with `ssh-add` on the host, never inside the worker.
 
 ## Tailscale
 

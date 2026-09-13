@@ -43,9 +43,10 @@ SYNC_HOST_DEVICE_ID="${SYNC_HOST_DEVICE_ID:-}"
 SYNC_HOST_ADDRESS="${SYNC_HOST_ADDRESS:-}"
 SSH_PUBKEY=""
 
-SSH_OPTS=(-i "$SSH_KEY" -p "$SSH_PORT" -o StrictHostKeyChecking=accept-new
+# -A forwards the host agent: the worker pushes with the laptop's keys and never stores one
+SSH_OPTS=(-A -i "$SSH_KEY" -p "$SSH_PORT" -o StrictHostKeyChecking=accept-new
 	-o UserKnownHostsFile="$VM_HOME/known_hosts" -o LogLevel=ERROR -o ConnectTimeout=10)
-RSH="ssh -i $SSH_KEY -p $SSH_PORT -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=$VM_HOME/known_hosts -o LogLevel=ERROR"
+RSH="ssh -A -i $SSH_KEY -p $SSH_PORT -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=$VM_HOME/known_hosts -o LogLevel=ERROR"
 
 ## HELPERS
 
@@ -209,6 +210,15 @@ cmd_sync(){
 	running || die "$VM_NAME not running"
 	info "pushing host state into the guest"
 	gssh "mkdir -p ~/.pi/agent ~/.config/gh ~/.config/glab-cli ~/.config/git ~/.ssh"
+	# public ssh material only: the forwarded agent supplies the keys, the guest needs to
+	# know which hosts are trusted and how to reach the self-hosted ones
+	copy "$HOME/.ssh/known_hosts" .ssh/known_hosts
+	# Keys reach the guest through the agent, so the host pins that name on-disk key files
+	# (IdentitiesOnly and IdentityFile) would only block it and warn on every call.
+	if [ -f "$HOME/.ssh/config" ]; then
+		grep -v -E '^[[:space:]]*(IdentitiesOnly|IdentityFile)' "$HOME/.ssh/config" >"$VM_HOME/ssh-config"
+		copy "$VM_HOME/ssh-config" .ssh/config
+	fi
 	copy "$HOME/.pi/agent/models.json" .pi/agent/models.json
 	copy "$HOME/.pi/agent/settings.json" .pi/agent/settings.json
 	copy "$HOME/.pi/agent/auth.json" .pi/agent/auth.json
@@ -217,7 +227,7 @@ cmd_sync(){
 	copy "$HOME/.pi/agent/DEVICES.md" .pi/agent/DEVICES.md
 	copy "$HOME/.config/gh/hosts.yml" .config/gh/hosts.yml
 	copy "$HOME/.config/gh/config.yml" .config/gh/config.yml
-	copy "$HOME/.config/glab-cli/config.yml" .config/glab-cli/config.yml
+	render_glab_config && copy "$VM_HOME/glab-config.yml" .config/glab-cli/config.yml || copy "$HOME/.config/glab-cli/config.yml" .config/glab-cli/config.yml
 	copy "$HOME/.gitconfig" .gitconfig
 	copydir "$HOME/.config/git-private" .config/git-private
 	copy "$HOME/.config/git/gitignore_global" .config/git/gitignore_global
@@ -240,6 +250,39 @@ cmd_sync(){
 	copy "$VM_HOME/provision-user.sh" /tmp/vworker-provision-user.sh
 	gssh "chmod 600 ~/.vworker-secrets.env 2>/dev/null; sudo -n bash /tmp/vworker-provision-user.sh"
 	forge_auth
+}
+
+# The guest has no keyring and cannot refresh an OAuth grant, so copy only the hosts whose
+# plaintext token can actually work there. Hosts holding a spent grant or a keyring-only
+# entry are left out instead of shipping a secret the worker can never use.
+render_glab_config(){
+	[ -f "$HOME/.config/glab-cli/config.yml" ] || return 1
+	if ! python3 - "$HOME/.config/glab-cli/config.yml" >"$VM_HOME/glab-config.yml" 2>/dev/null <<'PY'
+import sys, yaml
+try:
+    cfg = yaml.safe_load(open(sys.argv[1])) or {}
+except (OSError, yaml.YAMLError):
+    raise SystemExit(1)
+
+# glab writes empty fields as "key:" and reads a literal null as a path, so drop
+# every empty value instead of letting PyYAML round-trip it to null.
+def clean(d):
+    return {k: v for k, v in d.items() if v is not None}
+
+hosts = {h: clean(e) for h, e in (cfg.get("hosts") or {}).items()
+         if (e or {}).get("token") and not (e or {}).get("is_oauth2")}
+if not hosts:
+    raise SystemExit(1)
+cfg = clean(cfg)
+cfg["hosts"] = hosts
+yaml.safe_dump(cfg, sys.stdout, default_flow_style=False, sort_keys=False)
+PY
+	then
+		rm -f "$VM_HOME/glab-config.yml"
+		return 1
+	fi
+	# glab refuses a config file that is not 600
+	chmod 600 "$VM_HOME/glab-config.yml"
 }
 
 # The host token stays off the host disk: it goes from the host keyring through ssh
@@ -289,6 +332,7 @@ cmd_pair_sandbox(){ # cmd_pair_sandbox [host-address-for-guest]
 	set_cfg SANDBOX_FOLDER_ID "$SANDBOX_FOLDER_ID"
 	set_cfg SYNC_HOST_DEVICE_ID "$my_id"
 	set_cfg SYNC_HOST_ADDRESS "$addr"
+	printf '%s\n' "$guest_id" >"$VM_HOME/guest-id"
 	SYNC_HOST_DEVICE_ID="$my_id"
 	SYNC_HOST_ADDRESS="$addr"
 	cmd_sync
@@ -326,9 +370,38 @@ cmd_logs(){
 cmd_destroy(){
 	[ "${1:-}" = "--yes" ] || die "this deletes $VM_HOME; re-run with 'vworker destroy --yes'"
 	case "$VM_HOME" in /|"$HOME") die "refusing to delete $VM_HOME" ;; esac
+	forget_device
 	running && cmd_stop
 	rm -rf "$VM_HOME"
 	info "$VM_NAME destroyed"
+}
+
+# A destroyed worker must not linger in the host syncthing config, otherwise every rebuild
+# leaves another dead device behind. The id is cached at pairing time so this also works
+# once the guest is gone.
+forget_device(){
+	local id devs
+	id="$(cat "$VM_HOME/guest-id" 2>/dev/null || true)"
+	if [ -z "$id" ]; then
+		running && id="$(gssh cat .vworker-id 2>/dev/null | tr -d '\r' || true)"
+	fi
+	case "$id" in
+	*-*-*) ;;
+	*) warn "no cached syncthing id, the host config may keep a dead $VM_NAME entry"; return 0 ;;
+	esac
+	# drop it from the folder first, then the device, so nothing references a gone peer
+	if host_st_api "http://127.0.0.1:8384/rest/config/folders/$SANDBOX_FOLDER_ID" >/dev/null 2>&1; then
+		devs="$(host_st_api "http://127.0.0.1:8384/rest/config/folders/$SANDBOX_FOLDER_ID" \
+			| jq -c --arg id "$id" '[.devices[] | select(.deviceID != $id)]')"
+		host_st_api -X PATCH -H 'Content-Type: application/json' \
+			"http://127.0.0.1:8384/rest/config/folders/$SANDBOX_FOLDER_ID" \
+			-d "$(jq -n --argjson d "$devs" '{devices:$d}')" >/dev/null 2>&1
+	fi
+	if host_st_api -X DELETE "http://127.0.0.1:8384/rest/config/devices/$id" >/dev/null 2>&1; then
+		info "removed $VM_NAME ($id) from the host syncthing config"
+	else
+		warn "could not remove $id from the host syncthing config"
+	fi
 }
 
 cmd_help(){
