@@ -118,13 +118,16 @@ curl -X PATCH -H "X-API-Key: $K" -H 'Content-Type: application/json' \
 Copied from the host: pi config (models, settings, AGENTS.md, mcp.json), `gh` and `glab`
 config, git config. MCP servers pinned to host-only paths are pruned at provisioning time.
 
-Not usable out of the box, because the credentials do not travel:
+`gh` is logged in without any extra step: every `create` and `sync` reads the host token
+(`gh auth token`, from the host keyring) and pipes it through ssh stdin into
+`gh auth login --with-token` inside the guest. The token is never written to a file on the
+host. `vworker ssh 'gh auth status'` shows the copied token, `gh api user` works.
 
-- `gh`: the host stores its token in the keyring, so the copied `hosts.yml` carries no
-  token. Log in once inside the guest with `gh auth login` (device flow), or pipe a token:
-  `gh auth token | vworker ssh 'gh auth login --with-token'`.
-- `glab`: the copied OAuth refresh token is single use and already rotated, so API calls
-  fail with `invalid_grant`. Use `glab auth login --token` or the device flow.
+Still manual, because no usable credential exists to copy:
+
+- `glab`: the host `gitlab.com` token is an OAuth refresh token that is already rotated, so
+  the host itself fails with `invalid_grant` and there is nothing to copy. Log in inside the
+  guest (`glab auth login` device flow), or paste a PAT with `--token`.
 - git over SSH: the guest has no private key. Either add a new key (`ssh-keygen` in the
   guest, add the public half to GitHub/GitLab) or allow agent forwarding when connecting.
 

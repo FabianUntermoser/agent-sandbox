@@ -239,6 +239,22 @@ cmd_sync(){
 	copy "$VM_HOME/guest.env" .vworker-secrets.env
 	copy "$VM_HOME/provision-user.sh" /tmp/vworker-provision-user.sh
 	gssh "chmod 600 ~/.vworker-secrets.env 2>/dev/null; sudo -n bash /tmp/vworker-provision-user.sh"
+	forge_auth
+}
+
+# The host token stays off the host disk: it goes from the host keyring through ssh
+# stdin into gh's config inside the guest.
+forge_auth(){
+	local token out
+	if ! token="$(gh auth token 2>/dev/null)" || [ -z "$token" ]; then
+		warn "gh: no host token, log in with 'gh auth login' on the host or inside the guest"
+		return 0
+	fi
+	if out="$(printf '%s\n' "$token" | gssh "gh auth login --hostname github.com --with-token" 2>&1)"; then
+		info "gh: host token copied into the guest"
+	else
+		warn "gh: guest login failed: $(printf '%s' "$out" | tr -d '\r' | tail -1)"
+	fi
 }
 
 cmd_pair_sandbox(){ # cmd_pair_sandbox [host-address-for-guest]
