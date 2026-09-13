@@ -137,7 +137,8 @@ The guest keeps only public material: `known_hosts`, and a copy of the host `ssh
 does not have and would stop it from offering the agent's keys. Verified from inside a worker:
 `ssh -T git@github.com` greets the account, and shallow clones of a private GitHub repo and of
 `gitlab.untermoser.synology.me:server/nextcloud-config` both land on disk. Add keys to the
-agent with `ssh-add` on the host, never inside the worker.
+agent with `ssh-add` on the host, never inside the worker. A hand-written `ssh` into the worker is
+fine for shell work but carries no git credentials unless it also passes `-A`.
 
 ## Tailscale
 

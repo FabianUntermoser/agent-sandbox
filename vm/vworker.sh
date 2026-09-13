@@ -350,7 +350,7 @@ cmd_ssh(){
 cmd_status(){
 	if running; then
 		printf '%s  running (pid %s)\n' "$VM_NAME" "$(cat "$VM_HOME/qemu.pid")"
-		printf '  ssh:   ssh -i %s -p %s %s@127.0.0.1\n' "$SSH_KEY" "$SSH_PORT" "$VM_USER"
+		printf '  ssh:   ssh -A -i %s -p %s %s@127.0.0.1\n' "$SSH_KEY" "$SSH_PORT" "$VM_USER"
 		printf '  state: %s\n' "$VM_HOME"
 		if gssh true 2>/dev/null; then
 			gssh 'printf "  guest: %s | up %s | disk %s\n" "$(hostname)" "$(uptime -p)" "$(df -h --output=used,size / | tail -1)"'
