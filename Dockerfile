@@ -49,6 +49,12 @@ EOT
 RUN curl -fsSL https://acli.atlassian.com/linux/latest/acli_linux_amd64/acli -o /usr/local/bin/acli \
   && chmod +x /usr/local/bin/acli
 
+# worktrunk (wt) is pinned here but not installed in the image: this base ships git
+# 2.39 and wt needs 2.43+, so the worker guest (Debian 13) installs it from these two
+# pins, giving both ends one version that cannot drift.
+ARG WORKTRUNK_VERSION=0.77.0
+ARG WORKTRUNK_SHA256=8976ae756d31a80a330e134e9140b098818357292b318991a94b7ee53451da02
+
 ARG USERNAME=node
 
 COPY config/zshrc.local /home/$USERNAME/.zshrc.local

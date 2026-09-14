@@ -35,7 +35,8 @@ folder in the host syncthing config and shares it with that one worker.
 | `status` | running state plus guest summary |
 | `ssh [cmd]` | shell or one-off command in the guest |
 | `sync` | re-push pi/gh/glab/git config and re-run user provisioning |
-| `bake` | build the agent-sandbox image inside the worker, context and launcher included, and turn on lingering so a detached sandbox outlives the ssh session |
+| `setup` | one command to make this machine a worker: pushes tooling and worktrunk, lingers, builds the image, pairs syncthing. Idempotent, projects never appear here |
+| `bake` | rebuild the agent-sandbox image inside the worker (build context plus launchers), the fast loop while editing the image |
 | `pair-sandbox [addr]` | pair syncthing with the host, share the worker's sandbox folder |
 | `logs [n]` | serial console tail |
 | `destroy --yes` | delete the VM directory and drop its syncthing device from the host |

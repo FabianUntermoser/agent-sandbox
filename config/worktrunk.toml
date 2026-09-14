@@ -1,0 +1,10 @@
+# worktrunk (wt) config, shared by the sandbox image and the worker guest.
+#
+# A stream is a worktree inside the project, which lets one clone feed several stream
+# containers. Relative paths resolve from the repo root, so the path stays predictable
+# without shell integration, which a container does not have.
+worktree-path = ".worktrees/{{ branch | sanitize }}"
+
+# nobody sits in front of these terminals, a first-run prompt would only stall an agent
+skip-shell-integration-prompt = true
+skip-commit-generation-prompt = true

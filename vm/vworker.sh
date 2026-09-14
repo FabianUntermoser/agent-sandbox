@@ -82,9 +82,14 @@ copydir(){ # same, but syncs the directory contents instead of nesting it
 # rsync 23 is "some files were not transferred". With -L that is a dangling symlink
 # in the dotfile farm, which rsync cannot skip on its own, so it is a warning: the
 # rest of the tree arrives and only the entry without a referent stays behind.
+#
+# rsync 24 is "some files vanished". "~/.pi" holds context-mode session dbs that a
+# live run on the host rewrites while it is copied; the host is the source of truth
+# and the guest copy is opportunistic, so it is a warning too.
 rsync_partial(){
 	case "$2" in
 	0) ;;
+	24) warn "$1: some files vanished, a live writer changed them" ;;
 	23) warn "$1: skipped dangling links" ;;
 	*) die "rsync failed for $1 (code $2)" ;;
 	esac
@@ -341,33 +346,83 @@ forge_auth(){
 	fi
 }
 
-# The worker runs its own docker, so it needs its own image: the host image is not
-# exported, a fresh worker would have nothing to run. The build context and the launcher
-# go over, the guest builds. Re-run after a Dockerfile or config change.
-cmd_bake(){
-	running || die "$VM_NAME not running"
+# what the guest needs to build an image and to run a sandbox: the build context, the
+# two launchers, the one inheritance list and the worktree tool's config
+push_sandbox(){
 	info "pushing the build context"
 	copy "$REPO/docker-bake.hcl" agent-sandbox/docker-bake.hcl
 	copy "$REPO/Dockerfile" agent-sandbox/Dockerfile
 	copy "$REPO/.dockerignore" agent-sandbox/.dockerignore
 	copydir "$REPO/config" agent-sandbox/config
 	copydir "$REPO/scripts" agent-sandbox/scripts
-	# a sandbox is started and driven from inside the guest, so its two tools belong there
+	# a sandbox is started and driven from inside the guest, so its tools belong there
 	copy "$REPO/scripts/sandbox.sh" .local/bin/sandbox.sh
 	copy "$REPO/scripts/sandbox-panes.sh" .local/bin/sandbox-panes.sh
 	copy "$REPO/config/base.conf" .config/agent-sandbox/base.conf
-	# without lingering the guest's user manager goes away with the last ssh session and
-	# takes the detached sandbox with it
+	copy "$REPO/config/worktrunk.toml" .config/worktrunk/config.toml
+}
+
+# The container image builds worktrunk from the pin in the Dockerfile. The guest reads
+# those same two lines instead of holding its own pin, so both ends run one binary that
+# cannot drift apart.
+install_wt(){
+	local version sha url
+	version="$(sed -n 's/^ARG WORKTRUNK_VERSION=//p' "$REPO/Dockerfile" | tail -1)"
+	sha="$(sed -n 's/^ARG WORKTRUNK_SHA256=//p' "$REPO/Dockerfile" | tail -1)"
+	[ -n "$version" ] && [ -n "$sha" ] || die "no WORKTRUNK pins in $REPO/Dockerfile"
+	url="https://github.com/max-sixty/worktrunk/releases/download/v$version"
+	info "installing worktrunk $version in the guest"
+	# the musl build runs on the guest and inside the image alike
+	gssh "set -eu
+		curl -fsSL '$url/worktrunk-x86_64-unknown-linux-musl.tar.xz' -o /tmp/wt.tar.xz
+		printf '%s  /tmp/wt.tar.xz\n' '$sha' | sha256sum -c -
+		tar -xJf /tmp/wt.tar.xz -C /tmp worktrunk-x86_64-unknown-linux-musl/wt
+		install -m 0755 /tmp/worktrunk-x86_64-unknown-linux-musl/wt ~/.local/bin/wt
+		rm -rf /tmp/wt.tar.xz /tmp/worktrunk-x86_64-unknown-linux-musl
+		~/.local/bin/wt --version"
+}
+
+# without lingering the guest's user manager goes away with the last ssh session and
+# takes the detached sandbox with it
+enable_linger(){
 	if gssh 'sudo -n loginctl enable-linger "$USER"' 2>/dev/null; then
 		info "lingering on, a detached sandbox outlives the ssh session"
 	else
 		warn "no lingering, a detached sandbox dies with the ssh session"
 	fi
+}
+
+# The worker runs its own docker, so it needs its own image: the host image is not
+# exported, a fresh worker would have nothing to run. Re-run after a Dockerfile or
+# config change.
+build_image(){
 	info "building in the guest, pull plus apt/npm, takes minutes"
 	gssh 'chmod +x ~/.local/bin/sandbox.sh ~/.local/bin/sandbox-panes.sh; cd ~/agent-sandbox && docker buildx bake --load' ||
 		die "guest build failed, see 'vworker ssh' and re-run it there"
 	gssh 'docker images agent-sandbox --format "{{.Repository}}:{{.Tag}} {{.Size}} {{.CreatedSince}}"'
+}
+
+cmd_bake(){
+	running || die "$VM_NAME not running"
+	push_sandbox
+	enable_linger
+	build_image
 	info "done - in the guest: cd ~/sandbox/<project> && sandbox.sh pi"
+}
+
+# Everything that makes this machine a worker, once, and repeatable: tooling in,
+# worktrunk in, lingering on, image built, syncthing paired. A project is not part of
+# this, it is brought in later and only when it is not there yet.
+cmd_setup(){
+	running || die "$VM_NAME not running"
+	info "making $VM_NAME a sandbox worker"
+	push_sandbox
+	install_wt
+	enable_linger
+	build_image
+	cmd_pair_sandbox
+	gssh 'printf "  worktrunk: %s\n" "$(~/.local/bin/wt --version)"'
+	info "worker ready - bring a project in, then launch streams in it"
 }
 
 cmd_pair_sandbox(){ # cmd_pair_sandbox [host-address-for-guest]
@@ -484,9 +539,10 @@ cmd_help(){
   vworker status     running state + guest summary
   vworker ssh [cmd]  shell or one-off command in the worker
   vworker sync       re-push pi/gh/glab/git config and re-run user provisioning
-  vworker bake       build the agent-sandbox image inside the worker (context plus
-                     launcher) and let the user linger, so a sandbox can run there and
-                     outlive the ssh session
+  vworker setup      make this machine a worker: tooling in, worktrunk in, lingering
+                     on, image built, syncthing paired. Re-run it after a change
+  vworker bake       rebuild the agent-sandbox image inside the worker (build context
+                     plus launchers), the fast loop while editing the image
   vworker pair-sandbox [host-address]
                      pair syncthing with the host and share the worker's own sandbox
                      folder, nothing else (default host-address 10.0.2.2:22000 for the
@@ -511,6 +567,7 @@ case "${1:-help}" in
 	ssh) shift; cmd_ssh "$@" ;;
 	pair-sandbox) shift; cmd_pair_sandbox "$@" ;;
 	sync) cmd_sync ;;
+	setup) cmd_setup ;;
 	bake) cmd_bake ;;
 	logs) shift; cmd_logs "${1:-40}" ;;
 	destroy) shift; cmd_destroy "${1:-}" ;;
