@@ -12,7 +12,7 @@ ENV TZ="$TZ" \
     DEVCONTAINER=true \
     SHELL=/bin/zsh
 
-# git, zsh, tmux, vim, fzf, ripgrep, fd, jq, python3, pipx
+# git, zsh, tmux, vim, fzf, ripgrep, fd, jq, python3, pipx, rofi
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
 <<EOT
@@ -23,7 +23,7 @@ apt-get install -y --no-install-recommends \
   ripgrep fd-find jq nano vim ffmpeg tmux \
   python3 python3-pip python3-venv pipx \
   iptables ipset iproute2 dnsutils ca-certificates curl \
-  bubblewrap gh zstd
+  bubblewrap gh zstd rofi xdg-utils
 ln -s "$(command -v fdfind)" /usr/local/bin/fd
 rm -rf /var/lib/apt/lists/*
 EOT
@@ -62,6 +62,9 @@ RUN chown $USERNAME:$USERNAME /home/$USERNAME/.zshrc.local /home/$USERNAME/.bash
 
 COPY config/claude-settings.json /home/$USERNAME/.claude/settings.json
 RUN chown -R $USERNAME:$USERNAME /home/$USERNAME/.claude
+
+# the tmux helper scripts are mounted from the host at run time (see sandbox.sh)
+RUN install -d -o $USERNAME -g $USERNAME /home/$USERNAME/.local/bin
 
 COPY scripts/init-firewall.sh /usr/local/bin/init-firewall.sh
 COPY scripts/generate-allowlist.sh /tmp/generate-allowlist.sh

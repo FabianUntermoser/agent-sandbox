@@ -16,6 +16,8 @@ warn(){ echo -e "\e[33m!\e[0m $*" >&2; }
 
 SRC="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
 REPO="$(cd "$SRC/.." && pwd)"
+# the one list of what a sandbox inherits, shared with the container runner
+BASE_CONF="${BASE_CONF:-$REPO/config/base.conf}"
 CFG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/vworker"
 [ -f "$CFG_DIR/config" ] && . "$CFG_DIR/config"
 [ -f "$CFG_DIR/secrets.env" ] && . "$CFG_DIR/secrets.env"
@@ -61,15 +63,63 @@ render(){ # <template> [embedded-script]
 	' "$1"
 }
 
-copy(){ # copy <src> <remote-path relative to the guest home>, skips what this host does not have
-	[ -e "$1" ] || { warn "missing $1, skipped"; return 0; }
+copy(){ # copy <src> <remote-path relative to the guest home> [rsync args], skips what this host does not have
+	local src=$1 dest=$2 rc=0; shift 2
+	[ -e "$src" ] || { warn "missing $src, skipped"; return 0; }
 	# -L: dotfiles are symlinks into the repos, copy the referent not the link
-	rsync -aL -e "$RSH" "$1" "$VM_USER@127.0.0.1:$2"
+	# --mkpath: the guest side parent directories are not created by hand any more
+	rsync -aL --mkpath -e "$RSH" "$@" "$src" "$VM_USER@127.0.0.1:$dest" || rc=$?
+	rsync_partial "$src" "$rc"
 }
 
 copydir(){ # same, but syncs the directory contents instead of nesting it
-	[ -d "$1" ] || { warn "missing $1, skipped"; return 0; }
-	rsync -aL -e "$RSH" "${1%/}/" "$VM_USER@127.0.0.1:$2/"
+	local src=$1 dest=$2 rc=0; shift 2
+	[ -d "$src" ] || { warn "missing $src, skipped"; return 0; }
+	rsync -aL --mkpath -e "$RSH" "$@" "${src%/}/" "$VM_USER@127.0.0.1:$dest/" || rc=$?
+	rsync_partial "$src" "$rc"
+}
+
+# rsync 23 is "some files were not transferred". With -L that is a dangling symlink
+# in the dotfile farm, which rsync cannot skip on its own, so it is a warning: the
+# rest of the tree arrives and only the entry without a referent stays behind.
+rsync_partial(){
+	case "$2" in
+	0) ;;
+	23) warn "$1: skipped dangling links" ;;
+	*) die "rsync failed for $1 (code $2)" ;;
+	esac
+	return 0
+}
+
+# config/base.conf is the one list of what a sandbox inherits. The container mounts
+# these entries read-only where marked, the guest copies them, so `ro` is ignored
+# here and every entry arrives as the guest's own copy. `auth` is ignored too: the
+# guest has no credentials switch, cmd_sync always pushes forge credentials.
+copy_base(){
+	local kind path opts o e rel excludes args
+	[ -f "$BASE_CONF" ] || die "no base environment at $BASE_CONF"
+	while read -r kind path opts; do
+		case "$kind" in '' | \#*) continue ;; esac
+		path="${path/#\~/$HOME}"
+		case "$path" in "$HOME"/*) ;; *) die "base entry outside \$HOME: $path" ;; esac
+		rel="${path#"$HOME"/}"
+		args=()
+		for o in $opts; do
+			case "$o" in
+			ro | auth) ;;
+			exclude=*)
+				IFS=, read -r -a excludes <<<"${o#exclude=}"
+				for e in "${excludes[@]}"; do args+=("--exclude=$e"); done
+				;;
+			*) die "unknown base option '$o' on '$path'" ;;
+			esac
+		done
+		case "$kind" in
+		dir) copydir "$path" "$rel" "${args[@]}" ;;
+		file) copy "$path" "$rel" "${args[@]}" ;;
+		*) die "unknown base entry kind '$kind' in $BASE_CONF" ;;
+		esac
+	done <"$BASE_CONF"
 }
 
 ssh_pubkey(){
@@ -209,7 +259,7 @@ cmd_stop(){
 cmd_sync(){
 	running || die "$VM_NAME not running"
 	info "pushing host state into the guest"
-	gssh "mkdir -p ~/.pi/agent ~/.config/gh ~/.config/glab-cli ~/.config/git ~/.ssh"
+	copy_base
 	# public ssh material only: the forwarded agent supplies the keys, the guest needs to
 	# know which hosts are trusted and how to reach the self-hosted ones
 	copy "$HOME/.ssh/known_hosts" .ssh/known_hosts
@@ -219,19 +269,10 @@ cmd_sync(){
 		grep -v -E '^[[:space:]]*(IdentitiesOnly|IdentityFile)' "$HOME/.ssh/config" >"$VM_HOME/ssh-config"
 		copy "$VM_HOME/ssh-config" .ssh/config
 	fi
-	copy "$HOME/.pi/agent/models.json" .pi/agent/models.json
-	copy "$HOME/.pi/agent/settings.json" .pi/agent/settings.json
-	copy "$HOME/.pi/agent/auth.json" .pi/agent/auth.json
-	copy "$HOME/.pi/agent/AGENTS.md" .pi/agent/AGENTS.md
-	copy "$HOME/.pi/agent/mcp.json" .pi/agent/mcp.json
-	copy "$HOME/.pi/agent/DEVICES.md" .pi/agent/DEVICES.md
-	copy "$HOME/.config/gh/hosts.yml" .config/gh/hosts.yml
-	copy "$HOME/.config/gh/config.yml" .config/gh/config.yml
+	# glab resolves its host from git remotes, so the guest gets a rendered config and
+	# falls back to the host's file when rendering is not possible
 	render_glab_config && copy "$VM_HOME/glab-config.yml" .config/glab-cli/config.yml || copy "$HOME/.config/glab-cli/config.yml" .config/glab-cli/config.yml
-	copy "$HOME/.gitconfig" .gitconfig
-	copydir "$HOME/.config/git-private" .config/git-private
-	copy "$HOME/.config/git/gitignore_global" .config/git/gitignore_global
-	copy "$HOME/.config/git/termux.inc" .config/git/termux.inc
+	# the two files the guest's own shell setup sources, they live in this repo
 	copy "$REPO/config/aliasrc" .config/aliasrc
 	copy "$REPO/config/zshrc.local" .zshrc.local
 	copy "$REPO/config/tmux.conf" .tmux.conf
@@ -298,6 +339,35 @@ forge_auth(){
 	else
 		warn "gh: guest login failed: $(printf '%s' "$out" | tr -d '\r' | tail -1)"
 	fi
+}
+
+# The worker runs its own docker, so it needs its own image: the host image is not
+# exported, a fresh worker would have nothing to run. The build context and the launcher
+# go over, the guest builds. Re-run after a Dockerfile or config change.
+cmd_bake(){
+	running || die "$VM_NAME not running"
+	info "pushing the build context"
+	copy "$REPO/docker-bake.hcl" agent-sandbox/docker-bake.hcl
+	copy "$REPO/Dockerfile" agent-sandbox/Dockerfile
+	copy "$REPO/.dockerignore" agent-sandbox/.dockerignore
+	copydir "$REPO/config" agent-sandbox/config
+	copydir "$REPO/scripts" agent-sandbox/scripts
+	# a sandbox is started and driven from inside the guest, so its two tools belong there
+	copy "$REPO/scripts/sandbox.sh" .local/bin/sandbox.sh
+	copy "$REPO/scripts/sandbox-panes.sh" .local/bin/sandbox-panes.sh
+	copy "$REPO/config/base.conf" .config/agent-sandbox/base.conf
+	# without lingering the guest's user manager goes away with the last ssh session and
+	# takes the detached sandbox with it
+	if gssh 'sudo -n loginctl enable-linger "$USER"' 2>/dev/null; then
+		info "lingering on, a detached sandbox outlives the ssh session"
+	else
+		warn "no lingering, a detached sandbox dies with the ssh session"
+	fi
+	info "building in the guest, pull plus apt/npm, takes minutes"
+	gssh 'chmod +x ~/.local/bin/sandbox.sh ~/.local/bin/sandbox-panes.sh; cd ~/agent-sandbox && docker buildx bake --load' ||
+		die "guest build failed, see 'vworker ssh' and re-run it there"
+	gssh 'docker images agent-sandbox --format "{{.Repository}}:{{.Tag}} {{.Size}} {{.CreatedSince}}"'
+	info "done - in the guest: cd ~/sandbox/<project> && sandbox.sh pi"
 }
 
 cmd_pair_sandbox(){ # cmd_pair_sandbox [host-address-for-guest]
@@ -414,6 +484,9 @@ cmd_help(){
   vworker status     running state + guest summary
   vworker ssh [cmd]  shell or one-off command in the worker
   vworker sync       re-push pi/gh/glab/git config and re-run user provisioning
+  vworker bake       build the agent-sandbox image inside the worker (context plus
+                     launcher) and let the user linger, so a sandbox can run there and
+                     outlive the ssh session
   vworker pair-sandbox [host-address]
                      pair syncthing with the host and share the worker's own sandbox
                      folder, nothing else (default host-address 10.0.2.2:22000 for the
@@ -438,6 +511,7 @@ case "${1:-help}" in
 	ssh) shift; cmd_ssh "$@" ;;
 	pair-sandbox) shift; cmd_pair_sandbox "$@" ;;
 	sync) cmd_sync ;;
+	bake) cmd_bake ;;
 	logs) shift; cmd_logs "${1:-40}" ;;
 	destroy) shift; cmd_destroy "${1:-}" ;;
 	-h|--help|help) cmd_help ;;
