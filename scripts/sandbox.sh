@@ -160,7 +160,7 @@ BASE_CONF="${BASE_CONF:-$HOME/.config/agent-sandbox/base.conf}"
 [ -f "$BASE_CONF" ] || die "no base environment at '$BASE_CONF' - run 'make setup' in agent-sandbox"
 
 # what a project symlink may never hand to a sandbox even though the project asks
-# for it: the curated knowledge layers and the keys. ~/notes/_links/worknotes is fine, agent
+# for it: the curated knowledge layers and the keys. ~/notes/work is fine, agent
 # notes live there. An explicit MOUNTS line in .sandbox.conf still wins.
 # Resolved up front: the vault is a symlink to its synced copy on this host, so the
 # home spelling and the real path both have to be refused.
