@@ -14,6 +14,7 @@ help() {
 		  $prog <command...>         run any command
 		  $prog claude [args]        Claude Code
 		  $prog pi [args]            pi coding agent
+		  --stdio                    stdio straight through, no tmux (paseo provider)
 		  --new                      force a fresh container
 		  --offline                   restrict network to allowlist only
 		  -v, --verbose              run without tmux
@@ -30,7 +31,6 @@ MANIFEST=".sandbox.conf"
 
 # Defaults (overridden by manifest)
 AGENTS="pi claude codex"
-MERGE_AGENTS_SKILLS=true
 GIT_AUTH=true
 MOUNTS=()
 
@@ -40,11 +40,15 @@ MOUNTS=()
 FORCE_NEW=
 VERBOSE=
 OFFLINE=
+STDIO=
+VERSION_PROBE=
 while [ "$#" -gt 0 ]; do
 	case "$1" in
 		-h|--help) help; exit ;;
+		--version) VERSION_PROBE=1; shift ;;
 		--new)     FORCE_NEW=1; shift ;;
 		--offline) OFFLINE=1; shift ;;
+		--stdio)   STDIO=1; shift ;;
 		-v|--verbose) VERBOSE=1; shift ;;
 		--)        shift; break ;;
 		-*)        die "unknown flag $1" ;;
@@ -54,6 +58,14 @@ done
 
 ## MAIN
 
+# paseo asks for '<command> --version' before it launches anything and drops the
+# rest of the configured argv, so the probe answers with the pi the image carries
+# rather than with a flag this script does not know.
+if [ -n "$VERSION_PROBE" ]; then
+	STDIO=1
+	set -- pi --version
+fi
+
 SESSION=${1:-shell}
 case "${1:-}" in
 	"")        set -- zsh ;;
@@ -61,11 +73,21 @@ case "${1:-}" in
 	pi)        set -- bash -c 'export PATH=$HOME/.npm-global/bin:$PATH; exec pi "$@"' bash "${@:2}" ;;
 	ollama)    set -- bash -c 'export PATH=$HOME/.npm-global/bin:$PATH; exec ollama "$@"' bash "${@:2}" ;;
 esac
-[ -z "$VERBOSE" ] && set -- tmux new-session -A -s "$SESSION" "$@"
+if [ -z "$VERBOSE" ] && [ -z "$STDIO" ]; then
+	set -- tmux new-session -A -s "$SESSION" "$@"
+fi
 
 docker image inspect "$IMAGE" >/dev/null 2>&1 || die "image '$IMAGE' not found - run 'make build' in agent-sandbox repo"
 
 WORK=$PWD
+
+# Paseo probes a provider once with the caller's home as the working directory.
+# No host home is mounted for that run: the container keeps its own home, and the
+# probe, which asks for models, does not need the host files to answer.
+if [ -n "$STDIO" ] && [ "$WORK" = "$HOME" ]; then
+	WORK="/home/$RUSER"
+fi
+
 if [ "$WORK" = "$HOME" ] || [ -e "$WORK/.ssh" ] || [ -e "$WORK/.gnupg" ]; then
 	die "refusing to mount '$WORK' — it is \$HOME or holds .ssh/.gnupg."
 fi
@@ -99,14 +121,16 @@ if [ -f "$WORK/$MANIFEST" ]; then
 	source "$WORK/$MANIFEST"
 fi
 
-if [ -z "$FORCE_NEW" ] && docker ps --format '{{.Names}}' | grep -qx "$NAME"; then
+# Attaching is for a human who reopens a project. A paseo launch owns its own
+# session and its stdin is a pipe, so it always gets a fresh container.
+if [ -z "$FORCE_NEW" ] && [ -z "$STDIO" ] && docker ps --format '{{.Names}}' | grep -qx "$NAME"; then
 	echo "Attaching to '$NAME' ('$prog --new' forces a fresh one)…" >&2
 	exec docker exec -it -e "COLORTERM=${COLORTERM:-truecolor}" -w "$WORK" "$NAME" "$@"
 fi
 n=2; base=$NAME
 while docker ps -a --format '{{.Names}}' | grep -qx "$NAME"; do NAME="$base-$n"; n=$((n+1)); done
 
-mounts=(-v "$WORK:$WORK")
+mounts=()
 
 # -- Mount helpers -----------------------------------------------------------
 
@@ -118,14 +142,20 @@ add_mount() {
 	# `set -e` ends the run when this is the last command of a loop body
 	[ -e "$src" ] || return 0
 	src=$(readlink -f "$src") || return 0
-	local key="$src:$dest:${mode:-rw}"
-	[ -n "${_seen_mounts[$key]:-}" ] && return
-	_seen_mounts[$key]=1
+	# docker refuses two mounts on one destination, whatever their source or mode
+	# is, so the destination alone is what may appear once
+	[ -n "${_seen_mounts[$dest]:-}" ] && return
+	_seen_mounts[$dest]=1
 	mounts+=(-v "$src:$dest${mode:+:$mode}")
 }
 
-mount_dir()  { [ -d "$1" ] && add_mount "$1" "$2" "${3:-}"; }
-mount_file() { [ -f "$1" ] && add_mount "$1" "$2" "${3:-}"; }
+mount_dir()  { if [ -d "$1" ]; then add_mount "$1" "$2" "${3:-}"; fi; }
+mount_file() { if [ -f "$1" ]; then add_mount "$1" "$2" "${3:-}"; fi; }
+
+# The project comes first: it owns its own destination. It goes through the same
+# helper as everything else, which resolves a symlinked workdir and keeps a later
+# entry from mounting the same destination twice.
+mount_dir "$WORK" "$WORK"
 
 # Mount symlink targets that resolve outside the source directory
 mount_symlink_targets() {
@@ -254,12 +284,11 @@ while read -r kind path opts; do
 	esac
 done <"$BASE_CONF"
 
-if has_agent pi && [ "$MERGE_AGENTS_SKILLS" = "true" ] && [ -d "$HOME/.agents/skills" ]; then
-	for skill in "$HOME/.agents/skills"/*/; do
-		name=${skill%/}; name=${name##*/}
-		[ ! -d "$HOME/.pi/agent/skills/$name" ] && mount_dir "$skill" "/home/$RUSER/.pi/agent/skills/$name"
-	done
-fi
+# No per-skill mount: pi discovers ~/.agents/skills on its own, which is how the
+# host sees them. Mounting each one at the same path under ~/.pi made docker
+# create the target on the host, root-owned and empty, inside the mounted ~/.pi;
+# the guard then found "a directory" on every later run and skipped the mount, so
+# those skills went missing in the container instead.
 
 # Additional mounts from manifest
 for m in "${MOUNTS[@]}"; do
@@ -272,9 +301,13 @@ done
 # tree, so they are followed. The exceptions above are refused and reported.
 SYMLINKS=()
 REFUSED=()
+WORK_REAL=$(readlink -f "$WORK")
 while IFS= read -r -d '' link; do
 	target=$(readlink -f "$link") || continue
 	[ -n "$target" ] && [ -e "$target" ] || continue
+	# find prints its own start point when the workdir itself is a symlink, and
+	# that one is already mounted as the project
+	[ "$target" = "$WORK_REAL" ] && continue
 	if denied "$target"; then
 		REFUSED+=("${link#"$WORK"/} -> $target")
 		continue
@@ -294,8 +327,51 @@ if [ ${#REFUSED[@]} -gt 0 ]; then
 fi
 echo "" >&2
 
+# -- Paseo's stdio launch ----------------------------------------------------
+
+# Paseo spawns the agent as its own child and hands it two files it made on this
+# host: a merged mcp.json and its integration extension. Both arrive as paths in
+# the argv, so they are mounted at their own path or the container cannot read
+# them. Path args are scanned from a copy, never from "$@": a shift here would
+# eat the command the container is supposed to run.
+if [ -n "$STDIO" ]; then
+	argv=("$@")
+	i=0
+	while [ "$i" -lt "${#argv[@]}" ]; do
+		arg="${argv[$i]}"
+		case "$arg" in
+		--mcp-config|--extension)
+			i=$((i + 1))
+			p="${argv[$i]:-}"
+			if [ -n "$p" ]; then add_mount "$p" "$p" ro; fi
+			;;
+		--mcp-config=*|--extension=*)
+			add_mount "${arg#*=}" "${arg#*=}" ro
+			;;
+		esac
+		i=$((i + 1))
+	done
+	unset argv
+fi
+
+# A worktree's .git is a file naming the main checkout's .git/worktrees/<slug>,
+# so without that checkout mounted every git call in the container resolves a
+# path that is not there. The worktree itself stays the working directory.
+if [ -f "$WORK/.git" ]; then
+	common=$(git -C "$WORK" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)
+	main=${common%/.git}
+	if [ -n "$main" ] && [ -d "$main" ] && [ "$main" != "$WORK" ]; then
+		add_mount "$main" "$main"
+	fi
+fi
+
 TTY_FLAG="-t"
-[ -t 0 ] && TTY_FLAG="-it"
+if [ -n "$STDIO" ]; then
+	# pipes, not a tty: a tty echoes the request stream and rewrites its endings
+	TTY_FLAG="-i"
+elif [ -t 0 ]; then
+	TTY_FLAG="-it"
+fi
 
 if [ -n "$OFFLINE" ]; then
 	exec docker run --rm $TTY_FLAG \
