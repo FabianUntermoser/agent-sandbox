@@ -18,8 +18,10 @@ Sandbox container for AI agents (Claude, Codex, pi).
   allowed, agent notes live there.
 - **Manifest-driven** — per-project `.sandbox.conf` controls which agents and
   mounts are enabled. Defaults work for most projects.
-- **Skill merge** — `.agents/skills/` skills are merged into pi's skill
-  directory so pi discovers all skills (worknotes, blog, etc.).
+- **Skills come from `.agents/skills/`** — pi discovers them there, the same set
+  the host loads. No mount per skill: mounting one at the same path under `~/.pi`
+  left a root-owned empty directory on the host and dropped that skill from every
+  run after the first.
 - **Default network: host** — uses `--network=host` for direct host ollama
   access (already authenticated). No firewall in default mode.
 - **`--offline` mode** — restricts network to allowlisted domains only
@@ -117,6 +119,35 @@ sandbox-panes.sh keys stockis Escape   # raw keys when send is not enough
 work (`stockis`). Text goes through the tmux buffer, so dashes, quotes and newlines
 survive. Container tmux is a separate server from the host one, the host sessions
 are never touched.
+
+## Paseo
+
+Paseo spawns an agent as its own child process and drives it over stdio, so it
+launches the sandbox in `--stdio` mode: no tmux, pipes instead of a tty, and the
+rest of the argv forwarded into the container. Register the provider once in
+`~/.paseo/config.json`, then `paseo reload`:
+
+```json
+{
+  "agents": {
+    "providers": {
+      "pi-sandbox": {
+        "extends": "pi",
+        "label": "Pi (sandbox)",
+        "command": ["/home/you/.local/bin/sandbox.sh", "--stdio", "--", "pi"]
+      }
+    }
+  }
+}
+```
+
+Paseo runs the command with the workspace it created as `$PWD`, so the container
+mounts that worktree. Three details come from how paseo launches an agent: it
+writes a merged `mcp.json` and its own integration extension into `/tmp` and
+passes them as `--mcp-config` and `--extension`, both mounted read-only; a probe
+runs with `$HOME` as the working directory, which is never mounted, so that run
+keeps the container's own home; and the probe asks for `<command> --version`,
+which is answered with the pi the image carries.
 
 ## VM worker
 
