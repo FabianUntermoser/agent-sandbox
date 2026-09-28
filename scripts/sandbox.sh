@@ -31,7 +31,6 @@ MANIFEST=".sandbox.conf"
 
 # Defaults (overridden by manifest)
 AGENTS="pi claude codex"
-MERGE_AGENTS_SKILLS=true
 GIT_AUTH=true
 MOUNTS=()
 
@@ -285,12 +284,11 @@ while read -r kind path opts; do
 	esac
 done <"$BASE_CONF"
 
-if has_agent pi && [ "$MERGE_AGENTS_SKILLS" = "true" ] && [ -d "$HOME/.agents/skills" ]; then
-	for skill in "$HOME/.agents/skills"/*/; do
-		name=${skill%/}; name=${name##*/}
-		[ ! -d "$HOME/.pi/agent/skills/$name" ] && mount_dir "$skill" "/home/$RUSER/.pi/agent/skills/$name"
-	done
-fi
+# No per-skill mount: pi discovers ~/.agents/skills on its own, which is how the
+# host sees them. Mounting each one at the same path under ~/.pi made docker
+# create the target on the host, root-owned and empty, inside the mounted ~/.pi;
+# the guard then found "a directory" on every later run and skipped the mount, so
+# those skills went missing in the container instead.
 
 # Additional mounts from manifest
 for m in "${MOUNTS[@]}"; do

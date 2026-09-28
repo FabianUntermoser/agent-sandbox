@@ -18,8 +18,10 @@ Sandbox container for AI agents (Claude, Codex, pi).
   allowed, agent notes live there.
 - **Manifest-driven** — per-project `.sandbox.conf` controls which agents and
   mounts are enabled. Defaults work for most projects.
-- **Skill merge** — `.agents/skills/` skills are merged into pi's skill
-  directory so pi discovers all skills (worknotes, blog, etc.).
+- **Skills come from `.agents/skills/`** — pi discovers them there, the same set
+  the host loads. No mount per skill: mounting one at the same path under `~/.pi`
+  left a root-owned empty directory on the host and dropped that skill from every
+  run after the first.
 - **Default network: host** — uses `--network=host` for direct host ollama
   access (already authenticated). No firewall in default mode.
 - **`--offline` mode** — restricts network to allowlisted domains only
