@@ -118,6 +118,35 @@ work (`stockis`). Text goes through the tmux buffer, so dashes, quotes and newli
 survive. Container tmux is a separate server from the host one, the host sessions
 are never touched.
 
+## Paseo
+
+Paseo spawns an agent as its own child process and drives it over stdio, so it
+launches the sandbox in `--stdio` mode: no tmux, pipes instead of a tty, and the
+rest of the argv forwarded into the container. Register the provider once in
+`~/.paseo/config.json`, then `paseo reload`:
+
+```json
+{
+  "agents": {
+    "providers": {
+      "pi-sandbox": {
+        "extends": "pi",
+        "label": "Pi (sandbox)",
+        "command": ["/home/you/.local/bin/sandbox.sh", "--stdio", "--", "pi"]
+      }
+    }
+  }
+}
+```
+
+Paseo runs the command with the workspace it created as `$PWD`, so the container
+mounts that worktree. Three details come from how paseo launches an agent: it
+writes a merged `mcp.json` and its own integration extension into `/tmp` and
+passes them as `--mcp-config` and `--extension`, both mounted read-only; a probe
+runs with `$HOME` as the working directory, which is never mounted, so that run
+keeps the container's own home; and the probe asks for `<command> --version`,
+which is answered with the pi the image carries.
+
 ## VM worker
 
 `vm/` boots a full Debian guest with the same tooling when a container is not enough:
