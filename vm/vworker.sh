@@ -111,7 +111,7 @@ copy_base(){
 		args=()
 		for o in $opts; do
 			case "$o" in
-			ro | auth) ;;
+			ro | auth | grant=*) ;;
 			exclude=*)
 				IFS=, read -r -a excludes <<<"${o#exclude=}"
 				for e in "${excludes[@]}"; do args+=("--exclude=$e"); done

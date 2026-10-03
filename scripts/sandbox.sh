@@ -16,8 +16,21 @@ help() {
 		  $prog pi [args]            pi coding agent
 		  --stdio                    stdio straight through, no tmux (paseo provider)
 		  --new                      force a fresh container
-		  --offline                   restrict network to allowlist only
+		  --network=host             share the host network namespace
+		  --offline                  bridge plus default-deny egress (the default)
 		  -v, --verbose              run without tmux
+
+		What the sandbox inherits comes from .sandbox.conf in the project, and
+		nothing is inherited without one. Grants, all off by default:
+
+		  BASE=full                  the whole inherited set (the old default)
+		  AGENTS="pi claude codex"   agent config dirs
+		  GIT_AUTH=true              forge credentials
+		  LOCAL_BIN=true             ~/.local/bin
+		  TMUX=true                  ~/.tmux.conf
+		  MOUNTS=(...)               extra host paths
+		  NETWORK=host               host networking (default: bridge + firewall)
+		  HOST_SERVICES=ollama       reach a host service on the docker gateway
 	EOF
 }
 
@@ -29,9 +42,15 @@ RUSER=node
 # Per-project manifest (sourced if exists)
 MANIFEST=".sandbox.conf"
 
-# Defaults (overridden by manifest)
-AGENTS="pi claude codex"
-GIT_AUTH=true
+# Defaults: every switch is off, a manifest grants what it needs. BASE=full
+# restores the old inherited set for a project that has no manifest yet.
+AGENTS=
+GIT_AUTH=false
+LOCAL_BIN=false
+TMUX=false
+NETWORK=bridge
+HOST_SERVICES=
+BASE=
 MOUNTS=()
 
 
@@ -42,12 +61,16 @@ VERBOSE=
 OFFLINE=
 STDIO=
 VERSION_PROBE=
+NETWORK_FLAG=
 while [ "$#" -gt 0 ]; do
 	case "$1" in
 		-h|--help) help; exit ;;
 		--version) VERSION_PROBE=1; shift ;;
 		--new)     FORCE_NEW=1; shift ;;
 		--offline) OFFLINE=1; shift ;;
+		--network=*) NETWORK_FLAG=${1#*=}; shift ;;
+		--network) [ -n "${2:-}" ] || die "--network needs bridge or host"
+		           NETWORK_FLAG=$2; shift 2 ;;
 		--stdio)   STDIO=1; shift ;;
 		-v|--verbose) VERBOSE=1; shift ;;
 		--)        shift; break ;;
@@ -121,6 +144,28 @@ if [ -f "$WORK/$MANIFEST" ]; then
 	source "$WORK/$MANIFEST"
 fi
 
+# BASE=full is the migration hatch for a project that predates deny-by-default: it
+# turns on every grant still at its default, so an explicit grant in the manifest
+# still narrows it. --network and --offline beat the manifest.
+if [ "$BASE" = full ]; then
+	[ -z "$AGENTS" ] && AGENTS="pi claude codex"
+	[ "$GIT_AUTH" = false ] && GIT_AUTH=true
+	[ "$LOCAL_BIN" = false ] && LOCAL_BIN=true
+	[ "$TMUX" = false ] && TMUX=true
+fi
+[ -n "$NETWORK_FLAG" ] && NETWORK="$NETWORK_FLAG"
+[ -n "$OFFLINE" ] && NETWORK=bridge
+
+# A project without a manifest inherits nothing. Say so, so the tighter default
+# does not read as the sandbox silently missing files.
+if [ ! -f "$WORK/$MANIFEST" ] && [ -z "$VERSION_PROBE" ]; then
+	{
+		echo -e "  \e[33mno $MANIFEST: nothing is inherited from the host.\e[0m"
+		echo "  add one with BASE=full for the old defaults, or grant what it needs:"
+		echo "  AGENTS, GIT_AUTH, LOCAL_BIN, TMUX, MOUNTS, NETWORK, HOST_SERVICES"
+	} >&2
+fi
+
 # Attaching is for a human who reopens a project. A paseo launch owns its own
 # session and its stdin is a pipe, so it always gets a fresh container.
 if [ -z "$FORCE_NEW" ] && [ -z "$STDIO" ] && docker ps --format '{{.Names}}' | grep -qx "$NAME"; then
@@ -157,25 +202,6 @@ mount_file() { if [ -f "$1" ]; then add_mount "$1" "$2" "${3:-}"; fi; }
 # entry from mounting the same destination twice.
 mount_dir "$WORK" "$WORK"
 
-# Mount symlink targets that resolve outside the source directory
-mount_symlink_targets() {
-	local src=$1 container_prefix=$2 mode=${3:-}
-	[ -d "$src" ] || return 0
-	local src_real link rel target_real
-	src_real=$(readlink -f "$src") || return 0
-	while IFS= read -r -d '' link; do
-		target_real=$(readlink -f "$link") || continue
-		# skip when the symlink resolves to the entry itself (a symlinked entry like
-		# ~/.config/git-private has no children of its own) or stays inside it
-		case "$target_real" in "$src_real" | "$src_real"/*) continue ;; esac
-		# rel comes off $src, not off the resolved directory: entries like
-		# ~/.config/git-private are symlinks into the repos themselves and the
-		# container path has to mirror what the entry says
-		rel=${link#"$src"/}
-		add_mount "$target_real" "$container_prefix/$rel" "$mode"
-	done < <(find "$src" -type l -print0 2>/dev/null)
-}
-
 # -- Agent mounts (controlled by manifest) -----------------------------------
 
 has_agent() {
@@ -184,10 +210,16 @@ has_agent() {
 	return 1
 }
 
+truthy() { case "${1:-}" in true | 1 | yes | on) return 0 ;; *) return 1 ;; esac; }
+
 # -- Base environment (config/base.conf) -------------------------------------
 
 BASE_CONF="${BASE_CONF:-$HOME/.config/agent-sandbox/base.conf}"
 [ -f "$BASE_CONF" ] || die "no base environment at '$BASE_CONF' - run 'make setup' in agent-sandbox"
+
+# A catalogue from before the grants existed carries no grant tags, so its entries
+# mount for everyone. Say it instead of quietly keeping the old permissive default.
+grep -q 'grant=' "$BASE_CONF" || echo -e "  \e[33m$BASE_CONF has no grant tags, re-run 'make setup' for the gated catalogue.\e[0m" >&2
 
 # what a project symlink may never hand to a sandbox even though the project asks
 # for it: the curated knowledge layers and the keys. ~/notes/work is fine, agent
@@ -234,6 +266,8 @@ agent_of() {
 	"$HOME/.pi") printf pi ;;
 	"$HOME/.claude") printf claude ;;
 	"$HOME/.codex") printf codex ;;
+	# the skills tree is pi's, it discovers ~/.agents/skills
+	"$HOME/.agents") printf pi ;;
 	esac
 }
 
@@ -242,11 +276,12 @@ while read -r kind path opts; do
 	path="${path/#\~/$HOME}"
 	case "$path" in "$HOME"/*) ;; *) die "base entry outside \$HOME: $path" ;; esac
 
-	mode= want_auth=0
+	mode= want_auth=0 grant=
 	for o in $opts; do
 		case "$o" in
 		ro) mode=ro ;;
 		auth) want_auth=1 ;;
+		grant=*) grant=${o#grant=} ;;
 		exclude=*) ;; # guest side, see vworker.sh
 		*) die "unknown base option '$o' on '$path'" ;;
 		esac
@@ -256,8 +291,12 @@ while read -r kind path opts; do
 		echo "  not on this host: ${path#"$HOME"/}" >&2
 		continue
 	fi
-	if [ "$want_auth" = 1 ] && [ "$GIT_AUTH" != true ]; then
+	if [ "$want_auth" = 1 ] && ! truthy "$GIT_AUTH"; then
 		echo "  credentials off: ${path#"$HOME"/}" >&2
+		continue
+	fi
+	if [ -n "$grant" ] && ! truthy "${!grant:-}"; then
+		echo "  grant off (${grant}): ${path#"$HOME"/}" >&2
 		continue
 	fi
 
@@ -275,10 +314,7 @@ while read -r kind path opts; do
 
 	dest="/home/$RUSER/${path#"$HOME"/}"
 	case "$kind" in
-	dir)
-		mount_dir "$path" "$dest" "$mode"
-		mount_symlink_targets "$path" "$dest" "$mode"
-		;;
+	dir) mount_dir "$path" "$dest" "$mode" ;;
 	file) mount_file "$path" "$dest" "$mode" ;;
 	*) die "unknown base entry kind '$kind' in $BASE_CONF" ;;
 	esac
@@ -373,28 +409,36 @@ elif [ -t 0 ]; then
 	TTY_FLAG="-it"
 fi
 
-if [ -n "$OFFLINE" ]; then
-	exec docker run --rm $TTY_FLAG \
-		--name "$NAME" \
+run=(docker run --rm $TTY_FLAG \
+	--name "$NAME" \
+	--hostname sandbox \
+	-e "COLORTERM=${COLORTERM:-truecolor}" \
+	-e DISABLE_AUTOUPDATER=1 \
+	-e DISABLE_TELEMETRY=1 \
+	-w "$WORK" \
+	"${mounts[@]}")
+
+case "$NETWORK" in
+host)
+	exec "${run[@]}" --network=host "$IMAGE" "$@"
+	;;
+bridge | offline | "")
+	# A host service on the docker gateway. The bridge stays default-deny: the
+	# firewall already keeps the container's own subnet, gateway included, open,
+	# so the service only has to listen there. A service bound to host loopback
+	# (the host ollama does) needs NETWORK=host instead.
+	case " $HOST_SERVICES " in
+	*" ollama "*)
+		run+=(--add-host=host.docker.internal:host-gateway -e OLLAMA_HOST=http://host.docker.internal:11434)
+		;;
+	esac
+	exec "${run[@]}" \
 		--cap-add=NET_ADMIN --cap-add=NET_RAW \
-		--hostname sandbox \
-		-e "COLORTERM=${COLORTERM:-truecolor}" \
-		-e DISABLE_AUTOUPDATER=1 \
-		-e DISABLE_TELEMETRY=1 \
-		-w "$WORK" \
-		"${mounts[@]}" \
 		--entrypoint /bin/bash \
 		"$IMAGE" \
-		-c "sudo /usr/local/bin/init-firewall.sh && exec \"\$@\"" bash "$@"
-else
-	exec docker run --rm $TTY_FLAG \
-		--name "$NAME" \
-		--network=host \
-		--hostname sandbox \
-		-e "COLORTERM=${COLORTERM:-truecolor}" \
-		-e DISABLE_AUTOUPDATER=1 \
-		-e DISABLE_TELEMETRY=1 \
-		-w "$WORK" \
-		"${mounts[@]}" \
-		"$IMAGE" "$@"
-fi
+		-c 'sudo /usr/local/bin/init-firewall.sh && exec "$@"' bash "$@"
+	;;
+*)
+	die "unknown NETWORK '$NETWORK' (bridge or host)"
+	;;
+esac

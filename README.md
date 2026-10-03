@@ -10,23 +10,25 @@ Sandbox container for AI agents (Claude, Codex, pi).
   in-container.
 - **Baked-in configs** — shell, aliasrc, claude settings and the CLIs (ollama,
   glab, ant, acli) are in the image, not mounted from host.
-- **One inherited base** — `config/base.conf` lists everything else a sandbox gets
-  from the host: agent configs, `~/.local/bin`, forge auth, tmux config. Add a
-  script or skill to your dotfiles and the next sandbox has it, no edit here.
+- **Deny by default**: a sandbox gets the project and nothing else. `config/base.conf`
+  is the catalogue of what it may inherit, and every entry needs a grant in the
+  project's `.sandbox.conf`: agent configs, forge auth, `~/.local/bin`, tmux config.
 - **Knowledge stays out** — a project symlink into the vault's PARA layers,
   `~/.ssh` or `~/.gnupg` is refused and reported. `~/notes/work/<project>` is
   allowed, agent notes live there.
-- **Manifest-driven** — per-project `.sandbox.conf` controls which agents and
-  mounts are enabled. Defaults work for most projects.
+- **Manifest-driven**: per-project `.sandbox.conf` grants what the project needs.
+  `BASE=full` restores the old inherited set for a project that has no manifest.
 - **Skills come from `.agents/skills/`** — pi discovers them there, the same set
   the host loads. No mount per skill: mounting one at the same path under `~/.pi`
   left a root-owned empty directory on the host and dropped that skill from every
   run after the first.
-- **Default network: host** — uses `--network=host` for direct host ollama
-  access (already authenticated). No firewall in default mode.
-- **`--offline` mode** — restricts network to allowlisted domains only
-  (Anthropic, GitHub, GitLab, npm, PyPI, ollama, …). Uses Docker bridge
-  network + firewall.
+- **Default network: bridge + firewall**: Docker bridge with default-deny egress,
+  allowlisted in `scripts/init-firewall.sh` (Anthropic, GitHub, GitLab, npm, PyPI,
+  ollama, …). `--network=host` or `NETWORK=host` opts out for host services.
+- **`--offline`**: the old name for the default bridge plus firewall.
+- **Host services**: `HOST_SERVICES=ollama` reaches a service listening on the
+  docker gateway. The host ollama binds `127.0.0.1`, so pi's ollama models need
+  `NETWORK=host`.
 - **Works in any directory** — mounts at real host path so Claude `--resume`
   and project keys match between host and container.
 
@@ -51,7 +53,7 @@ sandbox.sh claude --dangerously-skip-permissions
 sandbox.sh codex
 sandbox.sh pi
 sandbox.sh ollama launch claude   # ollama-managed agent launch
-sandbox.sh --offline pi            # restricted network, no cloud models
+sandbox.sh --network=host pi       # host network, for the host ollama
 ```
 
 Running `sandbox.sh` again in the same directory reattaches to the existing
@@ -77,26 +79,33 @@ runs in that container.
 
 ## What a sandbox inherits
 
-`config/base.conf` is the single list. `make setup` installs it to
-`~/.config/agent-sandbox/base.conf`, `sandbox.sh` reads it on every start, so
-editing that file needs no rebuild and no edit in this repo.
+Nothing, unless the project grants it. `config/base.conf` is the catalogue of what
+a sandbox may inherit. `make setup` installs it to
+`~/.config/agent-sandbox/base.conf` and `sandbox.sh` reads it on every start, so
+editing that file needs no rebuild and no edit in this repo. An entry is mounted
+only when its grant is on, and every grant defaults to off.
 
 ```
-# dir|file <path> [ro] [auth] [exclude=<glob,glob>]
-dir   ~/.local/bin         ro exclude=*.old
-file  ~/.tmux.conf
+# dir|file <path> [ro] [auth] [grant=<KEY>] [exclude=<glob,glob>]
 dir   ~/.pi                exclude=agent/npm,agent/git
+dir   ~/.agents
+dir   ~/.local/bin         ro grant=LOCAL_BIN exclude=*.old
+file  ~/.tmux.conf         grant=TMUX
+dir   ~/.config/gh         ro auth
 ```
 
-Paths are `$HOME`-relative and symlinks are followed, so the stow farm in `$HOME`
-is the manifest: a new script or skill appears in the sandbox by itself.
-
+- `grant=<KEY>` needs `<KEY>=true` in `.sandbox.conf`. The agent config dirs are
+  granted by listing the agent in `AGENTS` (`AGENTS="pi claude codex"`).
+- `auth` is mounted only with `GIT_AUTH=true` (forge credentials).
 - `ro` is read-only inside the container; the worker VM always gets its own copy.
-- `auth` is mounted only when the project manifest keeps credentials (`GIT_AUTH=true`).
 - `exclude` is skipped when the worker VM copies the entry, mounts ignore it.
 
-The container and the worker VM read the same file, so both see the same set.
-`AGENTS` in `.sandbox.conf` still narrows it per project.
+Symlinks inside a mounted directory are not followed, so granting `~/.local/bin`
+no longer drags in every repo the stow farm points at. A project symlink at the
+top of the project is still resolved, so `~/notes/work/<project>` keeps working.
+
+The container and the worker VM read the same file. The container honours the
+grants; the guest has no manifest and copies the catalogue.
 
 Deliberately not inherited: the host shell stack (both environments keep their own
 zsh and history), `~/.ssh`, and the curated vault layers. Project symlinks into
@@ -164,21 +173,28 @@ make vm-status
 
 ## Per-project manifest
 
-Drop a `.sandbox.conf` in any project to override defaults:
+Drop a `.sandbox.conf` in any project to grant what it needs. Every key defaults
+to off, and a project with no manifest gets only its own tree.
 
 ```bash
-# .sandbox.conf — sourced by sandbox.sh (bash syntax)
+# .sandbox.conf, sourced by sandbox.sh (bash syntax)
 
-# Agents to enable (space-separated, empty to disable)
-AGENTS="pi claude codex"
-
-# Additional bind mounts: "src:dest" per line
-MOUNTS=(
+AGENTS="pi claude"        # agent config dirs: pi, claude, codex
+GIT_AUTH=true             # forge credentials (gh, glab, git)
+LOCAL_BIN=true            # ~/.local/bin
+TMUX=true                 # ~/.tmux.conf
+NETWORK=host              # host networking; default is bridge + firewall
+HOST_SERVICES=ollama      # reach a host service on the docker gateway
+MOUNTS=(                  # extra host paths: "src:dest" per line
   # "/host/path:/container/path"
 )
+
+BASE=full                 # the whole inherited set, the pre-deny-by-default sandbox
 ```
 
-No manifest = all defaults (pi + claude + codex, git auth, skill merge).
+`BASE=full` is the migration hatch: it turns on every grant still at its default,
+so an explicit grant in the same manifest still narrows it. A project that has not
+been migrated gets `BASE=full` first, then its own grants as it is tightened.
 
 ## License
 
