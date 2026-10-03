@@ -22,12 +22,15 @@ Sandbox container for AI agents (Claude, Codex, pi).
   the host loads. No mount per skill: mounting one at the same path under `~/.pi`
   left a root-owned empty directory on the host and dropped that skill from every
   run after the first.
-- **Default network: bridge + firewall**: Docker bridge with default-deny egress,
-  allowlisted in `scripts/init-firewall.sh` (Anthropic, GitHub, GitLab, npm, PyPI,
-  ollama, …). `--network=host` or `NETWORK=host` opts out for host services.
+- **Default network: own bridge + firewall**: every sandbox runs on the dedicated
+  `agent-sandbox-net` network, not the shared default bridge, with default-deny
+  egress allowlisted in `scripts/init-firewall.sh` (Anthropic, GitHub, GitLab, npm,
+  PyPI, ollama, …). A sibling container is not reachable. `--network=host` or
+  `NETWORK=host` opts out for host services.
 - **`--offline`**: the old name for the default bridge plus firewall.
-- **Host services**: `HOST_SERVICES=ollama` reaches a service listening on the
-  docker gateway. The host ollama binds `127.0.0.1`, so pi's ollama models need
+- **Host services**: `HOST_SERVICES=ollama` is the one grant that opens the host
+  gateway, for port 11434 only. Nothing else on the host or the sandbox network is
+  reachable. The host ollama binds `127.0.0.1`, so pi's ollama models need
   `NETWORK=host`.
 - **Works in any directory** — mounts at real host path so Claude `--resume`
   and project keys match between host and container.

@@ -30,7 +30,7 @@ help() {
 		  TMUX=true                  ~/.tmux.conf
 		  MOUNTS=(...)               extra host paths
 		  NETWORK=host               host networking (default: bridge + firewall)
-		  HOST_SERVICES=ollama       reach a host service on the docker gateway
+		  HOST_SERVICES=ollama       open the host gateway on 11434
 	EOF
 }
 
@@ -423,20 +423,25 @@ host)
 	exec "${run[@]}" --network=host "$IMAGE" "$@"
 	;;
 bridge | offline | "")
-	# A host service on the docker gateway. The bridge stays default-deny: the
-	# firewall already keeps the container's own subnet, gateway included, open,
-	# so the service only has to listen there. A service bound to host loopback
-	# (the host ollama does) needs NETWORK=host instead.
-	case " $HOST_SERVICES " in
-	*" ollama "*)
-		run+=(--add-host=host.docker.internal:host-gateway -e OLLAMA_HOST=http://host.docker.internal:11434)
-		;;
-	esac
+	# One dedicated network for every sandbox: the default bridge is shared with
+	# every other container on the host. Default-deny egress stays the floor, and
+	# HOST_SERVICES is the one grant that opens this container's own gateway.
+	NETNAME=agent-sandbox-net
+	docker network inspect "$NETNAME" >/dev/null 2>&1 || docker network create "$NETNAME" >/dev/null
+	run+=(--network="$NETNAME")
+	if [ -n "$HOST_SERVICES" ]; then
+		run+=(--add-host=host.docker.internal:host-gateway)
+		case " $HOST_SERVICES " in
+		*" ollama "*)
+			run+=(-e OLLAMA_HOST=http://host.docker.internal:11434)
+			;;
+		esac
+	fi
 	exec "${run[@]}" \
 		--cap-add=NET_ADMIN --cap-add=NET_RAW \
 		--entrypoint /bin/bash \
 		"$IMAGE" \
-		-c 'sudo /usr/local/bin/init-firewall.sh && exec "$@"' bash "$@"
+		-c "sudo /usr/local/bin/init-firewall.sh $HOST_SERVICES && exec \"\$@\"" bash "$@"
 	;;
 *)
 	die "unknown NETWORK '$NETWORK' (bridge or host)"

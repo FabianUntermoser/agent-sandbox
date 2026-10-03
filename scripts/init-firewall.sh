@@ -2,6 +2,8 @@
 
 # USAGE: default-deny egress firewall for agent sandbox container
 #
+# Optional args name host services to open on the container's own gateway: ollama.
+#
 # Two correctness invariants are baked in here — do not "simplify" them away:
 #  (1) Policies are reset to ACCEPT right after the flush so a re-run can still
 #      reach the internet to rebuild the allowlist. A leftover -P OUTPUT DROP
@@ -58,9 +60,19 @@ done
 iptables -A INPUT  -m state --state ESTABLISHED,RELATED -j ACCEPT
 iptables -A OUTPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
 
-# Local docker network
-LOCAL_CIDR=$(ip route | grep -E "^[0-9.]+/[0-9]+ " | head -1 | cut -d' ' -f1 || true)
-[[ -n "$LOCAL_CIDR" ]] && iptables -A OUTPUT -d "$LOCAL_CIDR" -j ACCEPT
+# Host services are opt-in: only a granted service's port on this container's own
+# gateway is opened. The docker subnet itself stays closed, so a sibling container
+# on the same network is not reachable.
+GW=$(ip route | awk '/^default/ {print $3; exit}')
+for svc in "$@"; do
+  case "$svc" in
+  ollama) svc_ports=(11434) ;;
+  *) echo "error: unknown host service '$svc'" >&2; exit 1 ;;
+  esac
+  for p in "${svc_ports[@]}"; do
+    [[ -n "$GW" ]] && iptables -A OUTPUT -d "$GW" -p tcp --dport "$p" -j ACCEPT
+  done
+done
 
 # Allowlist
 iptables -A OUTPUT -m set --match-set allowed-domains dst -j ACCEPT
