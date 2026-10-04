@@ -4,36 +4,30 @@ Sandbox container for AI agents (Claude, Codex, pi).
 
 ## Features
 
-- **Restrict agent to current directory** — only `$PWD` is writable.
-- **Dynamic symlink resolution** — symlinks in `$PWD` are resolved and their real
-  targets mounted, so files outside `$PWD` (repos, notes, assets) are accessible
-  in-container.
-- **Baked-in configs** — shell, aliasrc, claude settings and the CLIs (ollama,
-  glab, ant, acli) are in the image, not mounted from host.
-- **Deny by default**: a sandbox gets the project and nothing else. `config/base.conf`
-  is the catalogue of what it may inherit, and every entry needs a grant in the
-  project's `.sandbox.conf`: agent configs, forge auth, `~/.local/bin`, tmux config.
-- **Knowledge stays out** — a project symlink into the vault's PARA layers,
-  `~/.ssh` or `~/.gnupg` is refused and reported. `~/notes/work/<project>` is
-  allowed, agent notes live there.
-- **Manifest-driven**: per-project `.sandbox.conf` grants what the project needs.
-  `BASE=full` restores the old inherited set for a project that has no manifest.
-- **Skills come from `.agents/skills/`** — pi discovers them there, the same set
-  the host loads. No mount per skill: mounting one at the same path under `~/.pi`
-  left a root-owned empty directory on the host and dropped that skill from every
-  run after the first.
-- **Default network: own bridge + firewall**: every sandbox runs on the dedicated
-  `agent-sandbox-net` network, not the shared default bridge, with default-deny
-  egress allowlisted in `scripts/init-firewall.sh` (Anthropic, GitHub, GitLab, npm,
-  PyPI, ollama, …). A sibling container is not reachable. `--network=host` or
-  `NETWORK=host` opts out for host services.
-- **`--offline`**: the old name for the default bridge plus firewall.
-- **Host services**: `HOST_SERVICES=ollama` is the one grant that opens the host
-  gateway, for port 11434 only. Nothing else on the host or the sandbox network is
-  reachable. The host ollama binds `127.0.0.1`, so pi's ollama models need
-  `NETWORK=host`.
-- **Works in any directory** — mounts at real host path so Claude `--resume`
-  and project keys match between host and container.
+- The sandbox mounts the project at its host path and nothing else. A host path arrives
+  only through a `.sandbox.conf` grant, and `ro` makes that grant read-only in the
+  container. A project without a manifest gets only its own tree, and prints a warning.
+- A symlink at the top of the project is resolved and its target mounted in its place,
+  so a checkout that links a shared repo, an asset tree, or `~/notes/work/<project>`
+  stays reachable. Symlinks nested deeper are not followed, and a target in the vault,
+  `~/.ssh`, or `~/.gnupg` is refused and reported.
+- Shell, aliasrc, Claude settings, and the CLIs (ollama, glab, ant, acli) are in the
+  image, not mounted from the host.
+- `config/base.conf` is the catalogue of what a sandbox may inherit. Every entry needs a
+  grant in the project's `.sandbox.conf`: agent configs, forge auth, `~/.local/bin`, and
+  the tmux config. `BASE=full` is the one-line grant for the whole set.
+- Skills come from `.agents/skills/`. With `pi` in `AGENTS` the sandbox mounts `~/.agents`,
+  so pi finds the skills the host finds. Mounting one skill under `~/.pi` instead left a
+  root-owned empty directory on the host and dropped that skill from every later run.
+- Every sandbox runs on the `agent-sandbox-net` network, not the shared default bridge,
+  with default-deny egress allowlisted in `scripts/init-firewall.sh` (Anthropic, GitHub,
+  GitLab, npm, PyPI, ollama, and more). A sibling container is not reachable.
+  `--network=host` or `NETWORK=host` opts out.
+- `HOST_SERVICES=ollama` opens the host gateway on port 11434, and nothing else on the
+  host or the sandbox network. The host ollama binds `127.0.0.1`, so pi's ollama models
+  need `NETWORK=host`. `--offline` is the old name for the default bridge plus firewall.
+- The project mounts at its real host path, so Claude `--resume` and the project key pi
+  uses match between the host and the container.
 
 ## Usage
 
@@ -43,7 +37,7 @@ Sandbox container for AI agents (Claude, Codex, pi).
 # build image
 make build
 
-# one-time setup (installs sandbox.sh to ~/.local/bin)
+# one-time setup (installs sandbox.sh and base.conf)
 make setup
 
 # run in any project directory
@@ -64,9 +58,10 @@ container. `--new` forces a fresh one.
 
 ## Resume
 
-Agent sessions live in the mounted config (`~/.pi`, `~/.claude/projects`), so they outlive
-the container, and the project is mounted at its real host path, which is the key `pi` uses
-to find the session for a directory.
+Agent sessions live in the mounted config directories, so they outlive the container. `~/.pi`
+and `~/.claude/projects` mount only when the manifest grants the matching agent, and the
+project is mounted at its real host path, which is the key `pi` uses to find the session for
+a directory.
 
 ```sh
 sandbox.sh                    # container still up: reattaches, tmux layout intact
@@ -104,8 +99,9 @@ dir   ~/.config/gh         ro auth
 - `exclude` is skipped when the worker VM copies the entry, mounts ignore it.
 
 Symlinks inside a mounted directory are not followed, so granting `~/.local/bin`
-no longer drags in every repo the stow farm points at. A project symlink at the
-top of the project is still resolved, so `~/notes/work/<project>` keeps working.
+mounts that directory alone, not every repo the stow farm points at. A symlink at
+the top of the project resolves and its target mounts in its place, so
+`~/notes/work/<project>` stays reachable.
 
 The container and the worker VM read the same file. The container honours the
 grants; the guest has no manifest and copies the catalogue.
@@ -187,7 +183,7 @@ GIT_AUTH=true             # forge credentials (gh, glab, git)
 LOCAL_BIN=true            # ~/.local/bin
 TMUX=true                 # ~/.tmux.conf
 NETWORK=host              # host networking; default is bridge + firewall
-HOST_SERVICES=ollama      # reach a host service on the docker gateway
+HOST_SERVICES=ollama      # open the host gateway on port 11434
 MOUNTS=(                  # extra host paths: "src:dest" per line
   # "/host/path:/container/path"
 )
