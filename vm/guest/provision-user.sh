@@ -60,6 +60,7 @@ fi
 # mcp.json is copied verbatim, so servers pinned to host-only paths (the hyprland
 # browser helper) would error on every pi start in the guest
 mcp="$HOME_DIR/.pi/agent/mcp.json"
+adapter="$HOME_DIR/.pi/agent/mcp-adapter.json"
 if [ -f "$mcp" ]; then
 	list="$(jq -r '(.mcpServers // {}) | to_entries[] | select(.value.command // "" | startswith("/")) | "\(.key)\t\(.value.command)"' "$mcp")"
 	while IFS=$'\t' read -r key cmd; do
@@ -69,8 +70,18 @@ if [ -f "$mcp" ]; then
 		tmp="$(mktemp)"
 		jq --arg k "$key" 'del(.mcpServers[$k])' "$mcp" >"$tmp"
 		mv "$tmp" "$mcp"
+		# the adapter file overrides a server of the same name, and an override whose
+		# server is gone is a server with neither command nor url
+		if [ -f "$adapter" ]; then
+			tmp="$(mktemp)"
+			jq --arg k "$key" 'del(.mcpServers[$k])' "$adapter" >"$tmp"
+			mv "$tmp" "$adapter"
+		fi
 	done <<<"$list"
 	chown "$VM_USER:$VM_USER" "$mcp"
+	if [ -f "$adapter" ]; then
+		chown "$VM_USER:$VM_USER" "$adapter"
+	fi
 fi
 
 ## GIT

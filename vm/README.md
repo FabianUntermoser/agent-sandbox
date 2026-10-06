@@ -117,9 +117,10 @@ curl -X PATCH -H "X-API-Key: $K" -H 'Content-Type: application/json' \
 
 ## Authentication state
 
-Copied from the host: pi config (models, settings, AGENTS.md, mcp.json), `gh` and `glab`
-config, git config, ssh `known_hosts` and a sanitized `ssh/config`. MCP servers pinned to
-host-only paths are pruned at provisioning time.
+Copied from the host: pi config (models, settings, AGENTS.md, mcp.json, mcp-adapter.json),
+`gh` and `glab` config, git config, ssh `known_hosts` and a sanitized `ssh/config`. MCP
+servers pinned to host-only paths are pruned at provisioning time, from `mcp.json` and from
+any same-named override in `mcp-adapter.json`.
 
 `gh` is logged in without any extra step: every `create` and `sync` reads the host token
 (`gh auth token`, from the host keyring) and pipes it through ssh stdin into
