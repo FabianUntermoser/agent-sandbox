@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-# USAGE: one-time setup — build image, install sandbox.sh to PATH
+# USAGE: one-time setup, build image, install sandbox.sh to PATH
 
 set -euo pipefail
 

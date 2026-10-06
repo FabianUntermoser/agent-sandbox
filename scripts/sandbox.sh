@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-# USAGE: firewalled dev container for $PWD — mounts project, runs any command
+# USAGE: firewalled dev container for $PWD, mounts project, runs any command
 
 set -euo pipefail
 
@@ -8,7 +8,7 @@ prog=${0##*/}
 die() { printf "\e[31merror:\e[0m %s\n" "$*" >&2; exit 1; }
 help() {
 	cat <<-EOF
-		$prog — dev container for \$PWD
+		$prog, dev container for \$PWD
 
 		  $prog                      interactive shell
 		  $prog <command...>         run any command
@@ -112,7 +112,7 @@ if [ -n "$STDIO" ] && [ "$WORK" = "$HOME" ]; then
 fi
 
 if [ "$WORK" = "$HOME" ] || [ -e "$WORK/.ssh" ] || [ -e "$WORK/.gnupg" ]; then
-	die "refusing to mount '$WORK' — it is \$HOME or holds .ssh/.gnupg."
+	die "refusing to mount '$WORK', it is \$HOME or holds .ssh/.gnupg."
 fi
 KEY=$(printf '%s' "$WORK" | sed 's#[^a-zA-Z0-9]#-#g')
 PROJ="$HOME/.claude/projects/$KEY"

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 # USAGE: generate ipset allowlist from ALLOWED_DOMAINS at build time
-# Outputs a shell snippet that init-firewall.sh sources — no DNS at runtime.
+# Outputs a shell snippet that init-firewall.sh sources, no DNS at runtime.
 
 set -euo pipefail
 

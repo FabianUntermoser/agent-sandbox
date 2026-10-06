@@ -4,7 +4,7 @@
 #
 # Optional args name host services to open on the container's own gateway: ollama.
 #
-# Two correctness invariants are baked in here — do not "simplify" them away:
+# Two correctness invariants are baked in here, do not "simplify" them away:
 #  (1) Policies are reset to ACCEPT right after the flush so a re-run can still
 #      reach the internet to rebuild the allowlist. A leftover -P OUTPUT DROP
 #      from a previous run would otherwise block the github/dns fetches below and
@@ -45,10 +45,10 @@ iptables -A OUTPUT -o lo -j ACCEPT
 
 ipset create allowed-domains hash:net
 
-# Pre-resolved static domains (built at image build time — no DNS at runtime)
+# Pre-resolved static domains (built at image build time, no DNS at runtime)
 source /etc/allowlist.sh
 
-# GitHub IP ranges (web/api/git) from the meta API — fetched at runtime
+# GitHub IP ranges (web/api/git) from the meta API, fetched at runtime
 # because they change frequently
 gh_ranges=$(curl -fsSL https://api.github.com/meta 2>/dev/null)
 echo "$gh_ranges" | jq -r '(.web + .api + .git)[]' | while read -r cidr; do
