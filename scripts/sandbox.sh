@@ -359,6 +359,23 @@ while read -r kind path opts; do
 	file) mount_file "$path" "$dest" "$mode" ;;
 	*) die "unknown base entry kind '$kind' in $BASE_CONF" ;;
 	esac
+
+	# An agent directory is a stow farm: the files inside it are symlinks into a
+	# checkout outside the container's copy of $HOME, so mounting the directory
+	# alone hands over dead links. pi reads its model list, its credentials and
+	# its settings through three of them and will not start without them, and the
+	# skills tree is symlinked the same way. Mount each target where its link
+	# resolves, which is the target's own host path. LOCAL_BIN is left out on
+	# purpose: its dangling links are the point, and a project that needs one of
+	# those binaries adds a MOUNTS line.
+	if [ -n "$agent" ] && [ "$kind" = dir ]; then
+		while IFS= read -r -d '' link; do
+			target=$(readlink -f "$link") || continue
+			[ -n "$target" ] && [ -e "$target" ] || continue
+			denied "$target" && continue
+			add_mount "$target" "$target"
+		done < <(find "$path" -maxdepth 4 -type l -print0 2>/dev/null)
+	fi
 done <"$BASE_CONF"
 
 # No per-skill mount: pi discovers ~/.agents/skills on its own, which is how the
