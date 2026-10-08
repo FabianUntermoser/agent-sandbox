@@ -67,13 +67,24 @@ if [[ -f /etc/allowlist-domains ]]; then
   done < /etc/allowlist-domains
 fi
 
-# GitHub IP ranges (web/api/git) from the meta API, fetched at runtime
-# because they change frequently
+# GitHub IP ranges (web/api/git) from the meta API, fetched at runtime because they change
+# frequently. The response is not trusted: a range that reaches private or reserved space must
+# not widen the boundary, so it is counted and reported instead of added. IPv6 ranges are left
+# out here because the set is IPv4 (hash:net); an IPv6 entry never reached it either way.
 gh_ranges=$(curl -fsSL https://api.github.com/meta 2>/dev/null)
-echo "$gh_ranges" | jq -r '(.web + .api + .git)[]' | while read -r cidr; do
-  [[ -z "$cidr" ]] && continue
+gh_cidrs=$(echo "$gh_ranges" | jq -r '(.web + .api + .git)[] | select(test("^[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+/[0-9]+$"))')
+gh_refused=0
+while read -r cidr; do
+  [[ -n "$cidr" ]] || continue
+  public_cidr "$cidr" || {
+    gh_refused=$((gh_refused + 1))
+    continue
+  }
   ipset add allowed-domains "$cidr" 2>/dev/null || true
-done
+done <<< "$gh_cidrs"
+if ((gh_refused > 0)); then
+  echo "  WARN: refused $gh_refused non-public GitHub CIDR(s)" >&2
+fi
 
 # Return traffic
 iptables -A INPUT  -m state --state ESTABLISHED,RELATED -j ACCEPT
