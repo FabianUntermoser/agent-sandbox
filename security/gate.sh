@@ -15,6 +15,27 @@ die() { err "$*"; exit 1; }
 
 command -v jq >/dev/null || die "jq is required"
 
+# A report is readable only when it carries the shape Trivy writes. Anything else fails the gate,
+# a valid JSON file with a result entry of an unexpected type included: a report nobody can
+# validate must never collapse into a clean image. "Results": null is what Trivy writes for an
+# image it found nothing in, and it stays a pass.
+readable() { # <report>
+	jq -e '
+		type == "object"
+		and (.SchemaVersion | type == "number")
+		and has("Results")
+		and (.Results == null or (.Results | type == "array"))
+		and ([.Results[]?
+			| select((type != "object")
+				or ((.Vulnerabilities != null) and (.Vulnerabilities | type != "array")))] | length) == 0
+		and ([.Results[]?.Vulnerabilities[]?
+			| select((type != "object")
+				or ((.Severity != null) and (.Severity | type != "string"))
+				or ((.VulnerabilityID != null) and (.VulnerabilityID | type != "string"))
+				or ((.FixedVersion != null) and (.FixedVersion | type != "string")))] | length) == 0
+	' "$1" >/dev/null 2>&1
+}
+
 blocked=0
 found=0
 total=0
@@ -24,9 +45,9 @@ for report in "$dir"/*/trivy.json; do
 	image=${report%/*}
 	image=${image##*/}
 
-	# An empty or truncated file yields an empty or zero count, and neither one is a clean image.
-	jq -e 'has("SchemaVersion") and has("Results")' "$report" >/dev/null 2>&1 ||
-		die "$image has no readable trivy report, refusing to pass"
+	# An empty, truncated or unreadable file, and a report whose entries are not what the count
+	# below expects, all land here.
+	readable "$report" || die "$image has no readable trivy report, refusing to pass"
 
 	fixable=$(jq -r '[.Results[]?.Vulnerabilities[]?
 		| select((.Severity == "HIGH" or .Severity == "CRITICAL") and ((.FixedVersion // "") | length > 0))]
