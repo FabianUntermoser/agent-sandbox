@@ -12,11 +12,16 @@
 #  (2) Only the `filter` table is flushed. Flushing `nat` destroys Docker's
 #      embedded DNS (127.0.0.11) → all egress dead. Never add `iptables -t nat -F`.
 #
-# Static domains are pre-resolved at build time into /etc/allowlist.sh.
+# Static domains are pre-resolved at build time into /etc/allowlist.sh, and resolved again when a
+# sandbox starts from /etc/allowlist-domains, because a CDN host moves.
 # Only GitHub IP ranges (which change often) are fetched at runtime.
 
 set -euo pipefail
 IFS=$'\n\t'
+
+# The public-address predicate is shared with the generator at build time.
+# shellcheck source=public-ip.sh
+source /usr/local/lib/public-ip.sh
 
 ## FLUSH
 
@@ -47,6 +52,20 @@ ipset create allowed-domains hash:net
 
 # Pre-resolved static domains (built at image build time, no DNS at runtime)
 source /etc/allowlist.sh
+
+# Resolved again at start, because a CDN host moves and a stale entry hangs with nothing in the
+# log. The baked list stays as the floor for when DNS is unavailable.
+if [[ -f /etc/allowlist-domains ]]; then
+  while read -r domain; do
+    [[ -n "$domain" ]] || continue
+    ips=$(dig +short A "$domain" 2>/dev/null | grep -E '^[0-9.]+$' || true)
+    for ip in $ips; do
+      # A resolver answering with a private or reserved address must not widen the boundary.
+      public_ipv4 "$ip" || continue
+      ipset add allowed-domains "$ip" 2>/dev/null || true
+    done
+  done < /etc/allowlist-domains
+fi
 
 # GitHub IP ranges (web/api/git) from the meta API, fetched at runtime
 # because they change frequently

@@ -1,6 +1,10 @@
 build:
 	docker buildx bake --load
 
+check:
+	bash -n scripts/*.sh
+	./scripts/public-ip.sh --self-check
+
 setup:
 	./scripts/setup.sh
 
@@ -37,4 +41,4 @@ vm-pair:
 vm-destroy:
 	./vm/vworker.sh destroy --yes
 
-.PHONY: build setup uninstall shell claude pi vm-create vm-start vm-stop vm-status vm-sync vm-pair vm-destroy
+.PHONY: build check setup uninstall shell claude pi vm-create vm-start vm-stop vm-status vm-sync vm-pair vm-destroy

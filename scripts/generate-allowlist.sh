@@ -7,6 +7,15 @@ set -euo pipefail
 
 ## DEFAULTS
 
+# The predicate lives in one place: a resolved address that reaches a private or reserved network
+# must not enter the allowlist, whether it is resolved now or when a sandbox starts.
+PUBLIC_IP_LIB="${PUBLIC_IP_LIB:-/usr/local/lib/public-ip.sh}"
+if [[ ! -f "$PUBLIC_IP_LIB" ]]; then
+  PUBLIC_IP_LIB="$(cd "$(dirname "$0")" && pwd)/public-ip.sh"
+fi
+# shellcheck source=public-ip.sh
+source "$PUBLIC_IP_LIB"
+
 ALLOWED_DOMAINS=(
   api.anthropic.com
   statsig.anthropic.com
@@ -40,6 +49,13 @@ ALLOWED_DOMAINS=(
 for domain in "${ALLOWED_DOMAINS[@]}"; do
   ips=$(dig +short A "$domain" | grep -E '^[0-9.]+$' || true)
   for ip in $ips; do
+    public_ipv4 "$ip" || continue
     echo "ipset -exist add allowed-domains $ip"
+    [[ -n "${IPS_FILE:-}" ]] && echo "$ip" >>"$IPS_FILE"
   done
 done
+
+# One domain per line, for the firewall to resolve again at start: a CDN host moves.
+if [ -n "${DOMAINS_FILE:-}" ]; then
+  printf '%s\n' "${ALLOWED_DOMAINS[@]}" >"$DOMAINS_FILE"
+fi
