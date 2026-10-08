@@ -11,6 +11,9 @@ ALLOWED_DOMAINS=(
   api.anthropic.com
   statsig.anthropic.com
   downloads.claude.ai
+  # The tunnel client behind a bridge instance dials the OpenAI control plane, and codex talks to
+  # the same host, so it belongs in the generic list rather than in a per-project grant.
+  api.openai.com
   raw.githubusercontent.com
   codeload.github.com
   objects.githubusercontent.com
