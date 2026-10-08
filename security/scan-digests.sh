@@ -42,39 +42,58 @@ declare -A taken=()   # one artifact directory per slug
 refs=()
 slugs=()
 
+# Every FROM Docker reads, whatever its case, its indentation and its spacing: the instruction name
+# is case-insensitive and a line may be indented. This parse refuses a FROM it cannot read, because a
+# stage left out is a base nobody scans, and a green run that covered less than the build did is
+# worse than a red one. The instruction allows no continuation, so one line is one FROM.
 while IFS= read -r raw; do
-	from=${raw#FROM }
+	# the capture keeps the whitespace that followed the instruction, and a message that starts with
+	# a space reads as a typo
+	read -r raw <<<"$raw"
+	# FROM [--platform=<value>] <image> [AS <name>]
+	rest=$raw
+	while :; do
+		read -r head tail <<<"$rest"
+		case $head in
+		--*) rest=$tail ;;
+		*) break ;;
+		esac
+	done
+	read -r image kw as_name extra <<<"$rest"
+	[ -n "$image" ] || die "$dockerfile has a FROM line with no image: $raw"
 	stage=""
-	case $from in
-	*' AS '* | *' as '*)
-		stage=${from##*[Aa][Ss] }
-		from=${from% [Aa][Ss] *}
-		;;
-	esac
+	if [ -n "$kw" ]; then
+		[ "${kw,,}" = as ] && [ -n "$as_name" ] && [ -z "$extra" ] ||
+			die "$dockerfile has a FROM line this parse cannot read: $raw"
+		stage=$as_name
+	fi
 	# a later FROM reads the stage a name was given to, which its own FROM already pinned
 	[ -z "$stage" ] || stages[${stage,,}]=1
-	case $from in
-	--*) from=${from#* } ;; # --platform=...
-	esac
-	if [ -n "${stages[${from,,}]:-}" ]; then
-		printf 'scan-digests: %s builds on stage %s, already scanned\n' "$raw" "$from" >&2
+	if [ -n "${stages[${image,,}]:-}" ]; then
+		printf 'scan-digests: %s builds on stage %s, already scanned\n' "$raw" "$image" >&2
 		continue
 	fi
-	case $from in
+	case $image in
 	scratch) printf 'scan-digests: %s has no base image, skipping\n' "$raw" >&2; continue ;;
 	esac
 
 	# the pinned reference is the FROM line itself, so nothing has to be kept in step by hand
-	ref=$from
+	ref=$image
 	while [[ $ref =~ \$\{([A-Za-z_][A-Za-z0-9_]*)\} ]]; do
 		name=${BASH_REMATCH[1]}
 		ref=${ref//\$\{$name\}/${args[$name]:-}}
 	done
 
 	case "$ref" in
-	*@sha256:*) ;;
+	*@sha256:*) digest=${ref##*@sha256:} ;;
 	*) die "$dockerfile has no digest on $raw, refusing to scan a tag" ;;
 	esac
+	# a digest-shaped tail on a tag is not a digest: docker resolves the tag, and the report then names
+	# an image nobody can pull again. 64 hex characters after the prefix, or the run stops here.
+	case $digest in
+	*[!0-9a-fA-F]*) die "$dockerfile has a malformed digest on $raw: $digest" ;;
+	esac
+	[ "${#digest}" -eq 64 ] || die "$dockerfile has a ${#digest} character digest on $raw, expected 64"
 	[ -z "${seen[$ref]:-}" ] || continue
 	seen[$ref]=1
 
@@ -94,7 +113,7 @@ while IFS= read -r raw; do
 
 	refs+=("$ref")
 	slugs+=("$slug")
-done < <(awk '/^FROM /{ sub(/^FROM /, ""); print }' "$dockerfile")
+done < <(sed -n 's/^[[:space:]]*[Ff][Rr][Oo][Mm]\([[:space:]].*\)\?$/\1/p' "$dockerfile")
 
 [ "${#refs[@]}" -gt 0 ] || die "$dockerfile has no base image to scan"
 

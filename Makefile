@@ -5,6 +5,7 @@ check:
 	bash -n scripts/*.sh
 	./scripts/public-ip.sh --self-check
 	./scripts/sandbox-manifest.test.sh
+	./scripts/scan-digests.test.sh
 
 # Real containers: the mounts are what they prove, so they need docker and the image.
 worktree-check:
