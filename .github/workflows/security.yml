@@ -1,0 +1,93 @@
+name: Security
+
+# Every image this repository builds or pins is inventoried with Syft and scanned with Trivy, and
+# a fixable high-severity finding from a distro advisory fails the run. What runs, what it means
+# and how to run the same checks locally: SECURITY.md.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  # A vulnerability disclosed against an image nobody rebuilds is invisible to a pull request, so
+  # the image is built and scanned again on its own schedule. GitHub disables a schedule after 60
+  # days without repository activity, and an unrun schedule is a silent one.
+  schedule:
+    - cron: '17 4 * * 1'
+  workflow_dispatch:
+
+# Nothing here needs a write scope, so nothing is granted one.
+permissions: {}
+
+# A superseded run answers an older commit. Cancel it instead of paying for its build.
+concurrency:
+  group: security-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  scan:
+    name: Scan images
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 45
+    env:
+      # One Trivy database for both scans below, so it is fetched once instead of twice. The
+      # runner is thrown away with its volume.
+      TRIVY_DB_VOLUME: sec-trivy-db
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Build image
+        run: make build
+
+      - name: Scan the built image
+        run: |
+          set -euo pipefail
+          # The image this run produced, named by its id and never by a tag, which can move
+          # between the build and the scan. A fresh runner holds no cache, so the base at its
+          # pinned digest and every apt and npm install arrive as they are today.
+          mkdir -p security-out/agent-sandbox
+          id=$(docker image inspect --format '{{.Id}}' agent-sandbox:latest)
+          printf '%s %s %s build\n' agent-sandbox "$id" "$GITHUB_SHA" \
+            > security-out/agent-sandbox/scan-target.txt
+          ./security/scan.sh "$id" security-out/agent-sandbox
+
+      - name: Scan the pinned base images
+        run: ./security/scan-digests.sh security-out
+
+      - name: Upload reports
+        # Reports are evidence for a run, not for the repository, and a blocked gate needs them
+        # most, so they are uploaded whatever the earlier steps did.
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: security-reports
+          path: security-out/
+          retention-days: 90
+
+  gate:
+    name: Security gate
+    # A separate job, not a step: the scan job stays green on a finding, so the reports it
+    # produced are still uploaded and readable when the gate blocks.
+    needs: scan
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Download reports
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: security-reports
+          path: security-out
+
+      - name: Apply policy
+        run: ./security/gate.sh security-out
