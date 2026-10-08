@@ -15,13 +15,16 @@ help() {
 		  $prog claude [args]        Claude Code
 		  $prog pi [args]            pi coding agent
 		  --stdio                    stdio straight through, no tmux (paseo provider)
+		  --manifest <path>          manifest to source instead of $PWD/.sandbox.conf; a path
+		                             outside the project lets one run use a generated manifest
 		  --new                      force a fresh container
 		  --network=host             share the host network namespace
 		  --offline                  bridge plus default-deny egress (the default)
 		  -v, --verbose              run without tmux
 
 		What the sandbox inherits comes from .sandbox.conf in the project, and
-		nothing is inherited without one. Grants, all off by default:
+		nothing is inherited without one. --manifest names another file. Grants, all
+		off by default:
 
 		  BASE=full                  the whole inherited set (the old default)
 		  AGENTS="pi claude codex"   agent config dirs
@@ -39,8 +42,12 @@ help() {
 IMAGE=agent-sandbox
 RUSER=node
 
-# Per-project manifest (sourced if exists)
+# Per-project manifest, sourced when it exists. An absolute MANIFEST names a file outside the
+# project, which is what a launcher wants when the manifest is generated for one run.
+# MANIFEST_EXPLICIT records that the caller named it: that one has to be there, the default one
+# may be absent.
 MANIFEST=".sandbox.conf"
+MANIFEST_EXPLICIT=
 
 # Defaults: every switch is off, a manifest grants what it needs. BASE=full
 # restores the old inherited set for a project that has no manifest yet.
@@ -72,6 +79,9 @@ while [ "$#" -gt 0 ]; do
 		--network) [ -n "${2:-}" ] || die "--network needs bridge or host"
 		           NETWORK_FLAG=$2; shift 2 ;;
 		--stdio)   STDIO=1; shift ;;
+		--manifest) [ -n "${2:-}" ] || die "--manifest needs a path"
+		            MANIFEST=$2; MANIFEST_EXPLICIT=1; shift 2 ;;
+		--manifest=*) MANIFEST=${1#*=}; MANIFEST_EXPLICIT=1; shift ;;
 		-v|--verbose) VERBOSE=1; shift ;;
 		--)        shift; break ;;
 		-*)        die "unknown flag $1" ;;
@@ -139,9 +149,15 @@ seed_pi_trust() {
 }
 seed_pi_trust "$@"
 
-# Load per-project manifest
-if [ -f "$WORK/$MANIFEST" ]; then
-	source "$WORK/$MANIFEST"
+# Load the manifest. The project's own may be absent; one the caller named must be readable, since
+# a run that quietly loses the grants it was asked for is worse than one that stops here.
+manifest_path="$WORK/$MANIFEST"
+# An absolute path is used as given, so the manifest can live outside the project it configures.
+[ "${MANIFEST#/}" != "$MANIFEST" ] && manifest_path=$MANIFEST
+if [ -f "$manifest_path" ] && [ -r "$manifest_path" ]; then
+	source "$manifest_path"
+elif [ -n "$MANIFEST_EXPLICIT" ]; then
+	die "manifest not found or unreadable: $manifest_path"
 fi
 
 # BASE=full is the migration hatch for a project that predates deny-by-default: it

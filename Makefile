@@ -4,6 +4,7 @@ build:
 check:
 	bash -n scripts/*.sh
 	./scripts/public-ip.sh --self-check
+	./scripts/sandbox-manifest.test.sh
 
 setup:
 	./scripts/setup.sh
