@@ -253,6 +253,15 @@ has_agent() {
 
 truthy() { case "${1:-}" in true | 1 | yes | on) return 0 ;; *) return 1 ;; esac; }
 
+# AGENTS names the agents a run may use rather than being a boolean, so any name in it turns that
+# grant on. Every other key in the catalogue is a boolean.
+granted() {
+	case "$1" in
+	AGENTS) [ -n "$AGENTS" ] ;;
+	*) truthy "${!1:-}" ;;
+	esac
+}
+
 # -- Base environment (config/base.conf) -------------------------------------
 
 BASE_CONF="${BASE_CONF:-$HOME/.config/agent-sandbox/base.conf}"
@@ -312,10 +321,20 @@ agent_of() {
 	esac
 }
 
+# The roots an agent directory link may resolve into. A link is mounted only inside one of them: a
+# grant that says pi's config directory must not also carry whatever else a link in it names.
+follow_roots=()
+
+inside_follow_root() {
+	local i
+	for ((i = 0; i < ${#follow_roots[@]}; i++)); do
+		case "$1" in "${follow_roots[i]}" | "${follow_roots[i]}"/*) return 0 ;; esac
+	done
+	return 1
+}
+
 while read -r kind path opts; do
 	case "$kind" in '' | \#*) continue ;; esac
-	path="${path/#\~/$HOME}"
-	case "$path" in "$HOME"/*) ;; *) die "base entry outside \$HOME: $path" ;; esac
 
 	mode= want_auth=0 grant=
 	for o in $opts; do
@@ -328,6 +347,22 @@ while read -r kind path opts; do
 		esac
 	done
 
+	# A follow root is never mounted itself, so it needs no destination and may sit outside $HOME,
+	# which is where a stow farm lives.
+	if [ "$kind" = follow ]; then
+		if [ -n "$grant" ] && ! granted "$grant"; then
+			echo "  grant off ($grant): $path" >&2
+			continue
+		fi
+		root=$(readlink -f "${path/#\~/$HOME}") || die "$path does not resolve"
+		[ -d "$root" ] || die "$path is not a directory"
+		follow_roots+=("$root")
+		continue
+	fi
+
+	path="${path/#\~/$HOME}"
+	case "$path" in "$HOME"/*) ;; *) die "base entry outside \$HOME: $path" ;; esac
+
 	if ! [ -e "$path" ]; then
 		echo "  not on this host: ${path#"$HOME"/}" >&2
 		continue
@@ -336,7 +371,7 @@ while read -r kind path opts; do
 		echo "  credentials off: ${path#"$HOME"/}" >&2
 		continue
 	fi
-	if [ -n "$grant" ] && ! truthy "${!grant:-}"; then
+	if [ -n "$grant" ] && ! granted "$grant"; then
 		echo "  grant off (${grant}): ${path#"$HOME"/}" >&2
 		continue
 	fi
@@ -360,15 +395,27 @@ while read -r kind path opts; do
 	*) die "unknown base entry kind '$kind' in $BASE_CONF" ;;
 	esac
 
-	# An agent directory is a stow farm: its files are symlinks into a checkout
-	# outside the container's copy of $HOME, so mounting the directory alone hands
-	# over dead links. Mount each target over the link, at the guest path the link
-	# already occupies, so the checkout itself stays out of the container.
+	# An agent directory is a stow farm: its files are symlinks into a checkout outside the
+	# container's copy of $HOME, so mounting the directory alone hands over dead links. Mount each
+	# target over the link, at the guest path the link already occupies, so the checkout itself stays
+	# out of the container. A link counts only when it resolves inside a follow root: the sandbox
+	# writes this directory, so without that bound a planted link would carry what it names into the
+	# next run, and a grant for pi's config would hand over a forge token with it.
+	# Depth 3 is what an agent reads: a config file below the directory, a skill directory below that.
+	# What links deeper is runtime state, codex's arg0 shims sit at depth 5, and it stays out.
 	if [ -n "$agent" ] && [ "$kind" = dir ]; then
+		[ "${#follow_roots[@]}" -gt 0 ] || echo -e "  \e[33m${BASE_CONF} declares no follow root, so no link under an agent directory is followed.\e[0m" >&2
 		while IFS= read -r -d '' link; do
 			target=$(readlink -f "$link") || continue
 			[ -n "$target" ] && [ -e "$target" ] || continue
-			denied "$target" && continue
+			if denied "$target"; then
+				echo "  link not followed (the vault, or a key): ${link#"$path"/} -> $target" >&2
+				continue
+			fi
+			if ! inside_follow_root "$target"; then
+				echo "  link not followed (outside every follow root): ${link#"$path"/} -> $target" >&2
+				continue
+			fi
 			add_mount "$target" "/home/$RUSER/${link#"$HOME"/}"
 		done < <(find "$path" -maxdepth 3 -type l -print0 2>/dev/null)
 	fi

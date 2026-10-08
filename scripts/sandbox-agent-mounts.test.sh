@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 
-# USAGE: cases for the mount an agent-directory symlink gets, run by make check
+# USAGE: cases for the mounts an agent-directory symlink earns, run by make check
 #
-# No container is started: docker is stubbed and records the arguments of the run, so a case
-# asserts the -v pairs the script would hand docker. The home is a throwaway tree and the checkout
-# it points at lives outside it, which is the shape the host has.
+# No container is started: docker is stubbed and records the arguments of the run, so a case asserts
+# the -v pairs the script would hand docker. The home is a throwaway tree and the checkout it points
+# at lives outside it, which is the shape the host has.
 
 set -euo pipefail
 
@@ -17,10 +17,10 @@ trap 'rm -rf "$work" "$stub"' EXIT
 
 home="$work/home"
 farm="$work/farm"
-mkdir -p "$home/.pi/agent/skills" "$farm/pi/agent/skills/first" "$farm/pi/agent/extensions" "$home/notes"
+mkdir -p "$home/.pi/agent/skills" "$farm/pi/agent/skills/first" "$farm/pi/agent/extensions" "$home/notes" "$home/.config/gh"
 
-# the checkout the links point at: the two files pi cannot start without, a skills directory
-# that only the link names, and a package file no link reaches
+# the checkout the links point at: the two files pi cannot start without, a skills directory that
+# only the link names, and a package file no link reaches
 : >"$farm/pi/agent/models.json"
 : >"$farm/pi/agent/auth.json"
 : >"$farm/pi/agent/extensions/whole-package.json"
@@ -33,6 +33,10 @@ mkdir -p "$home/.pi/agent/deep/one/two"
 ln -s "$farm/pi/agent/models.json" "$home/.pi/agent/deep/one/two/models.json"
 # the vault, which no grant hands over
 ln -s "$home/notes" "$home/.pi/agent/notes"
+# a forge token, which a grant for pi's config directory does not name. The sandbox writes this
+# directory, so a link planted here would otherwise carry the token into the next run.
+: >"$home/.config/gh/hosts.yml"
+ln -s "$home/.config/gh/hosts.yml" "$home/.pi/agent/forge"
 
 cat >"$stub/docker" <<EOF
 #!/usr/bin/env bash
@@ -42,44 +46,81 @@ exit 0
 EOF
 chmod +x "$stub/docker"
 
-printf 'dir   ~/.pi\n' >"$work/base.conf"
-printf 'AGENTS="pi"\n' >"$work/.sandbox.conf"
+baseconf() { printf '%s\n' "$@" >"$work/base.conf"; }
 
-rm -f "$work/args"
-(cd "$work" && HOME="$home" BASE_CONF="$work/base.conf" PATH="$stub:$PATH" \
-	"$SRC/sandbox.sh" --stdio --new true) >"$work/out" 2>&1 || true
+# run: writes the project manifest, then runs the base loop over it
+run() {
+	printf 'AGENTS="pi"\n' >"$work/.sandbox.conf"
+	rm -f "$work/args"
+	set +e
+	out=$(cd "$work" && HOME="$home" BASE_CONF="$work/base.conf" PATH="$stub:$PATH" \
+		"$SRC/sandbox.sh" --stdio --new true 2>&1)
+	status=$?
+	set -e
+	printf '%s\n' "$out" >"$work/out"
+}
 
-expect() {
-	local want=$1 got=$2 label=$3
-	if [[ $got == "$want" ]]; then
+expect() { # <label> <want: yes|no> <mount> <want-status: ok|fail>
+	local label=$1 want=$2 spec=$3 want_status=$4 got=no got_status=ok
+	grep -Fxq -- "$spec" "$work/args" 2>/dev/null && got=yes
+	[ "$status" -eq 0 ] || got_status=fail
+	if [ "$got" = "$want" ] && [ "$got_status" = "$want_status" ]; then
 		printf '  ok    %s\n' "$label"
 	else
-		printf '  FAIL  %s: wanted %s, got %s\n' "$label" "$want" "$got" >&2
-		sed 's/^/        /' "$work/out" >&2
+		printf '  FAIL  %s: wanted %s/%s, got %s/%s\n' "$label" "$want" "$want_status" "$got" "$got_status" >&2
+		tail -3 <<<"$out" | sed 's/^/        /' >&2
 		failed=1
 	fi
 }
 
-mount() { grep -Fxq -- "$1" "$work/args" 2>/dev/null && echo yes || echo no; }
+expect_says() { # <label> <substring>
+	if grep -Fq -- "$2" "$work/out"; then
+		printf '  ok    %s\n' "$1"
+	else
+		printf '  FAIL  %s: no line matching %s\n' "$1" "$2" >&2
+		tail -3 <<<"$out" | sed 's/^/        /' >&2
+		failed=1
+	fi
+}
 
-grep -q . "$work/args" || { printf '  FAIL  the run never reached docker\n' >&2; exit 1; }
+baseconf "follow $farm    grant=AGENTS" 'dir   ~/.pi'
+run
 
-expect yes "$(mount "$farm/pi/agent/models.json:/home/node/.pi/agent/models.json")" \
-	'a linked file arrives at the guest path the link occupies'
-expect yes "$(mount "$farm/pi/agent/auth.json:/home/node/.pi/agent/auth.json")" \
-	'and so does the second one'
-expect yes "$(mount "$farm/pi/agent/skills/first:/home/node/.pi/agent/skills/first")" \
-	'a linked directory does too'
-expect yes "$(mount "$home/.pi:/home/node/.pi")" \
-	'the directory itself is still mounted, so its own files arrive'
+expect 'a linked file arrives at the guest path the link occupies' yes \
+	"$farm/pi/agent/models.json:/home/node/.pi/agent/models.json" ok
+expect 'and so does the second one' yes \
+	"$farm/pi/agent/auth.json:/home/node/.pi/agent/auth.json" ok
+expect 'a linked directory does too' yes \
+	"$farm/pi/agent/skills/first:/home/node/.pi/agent/skills/first" ok
+expect 'the directory itself is still mounted, so its own files arrive' yes \
+	"$home/.pi:/home/node/.pi" ok
 
-expect no "$(mount "$farm/pi/agent/models.json:$farm/pi/agent/models.json")" \
-	'the checkout is not mounted at its own path'
-expect no "$(mount "$farm/pi/agent/extensions/whole-package.json:/home/node/.pi/agent/extensions/whole-package.json")" \
-	'a package file no link reaches stays out of the container'
-expect no "$(mount "$home/notes:/home/node/.pi/agent/notes")" \
-	'a link into the vault is refused'
-expect no "$(mount "$farm/pi/agent/models.json:/home/node/.pi/agent/deep/one/two/models.json")" \
-	'a link past the followed depth is not mounted'
+expect 'the checkout is not mounted at its own path' no \
+	"$farm/pi/agent/models.json:$farm/pi/agent/models.json" ok
+expect 'a package file no link reaches stays out of the container' no \
+	"$farm/pi/agent/extensions/whole-package.json:/home/node/.pi/agent/extensions/whole-package.json" ok
+expect 'a link into the vault is refused' no \
+	"$home/notes:/home/node/.pi/agent/notes" ok
+expect 'a link past the followed depth is not mounted' no \
+	"$farm/pi/agent/models.json:/home/node/.pi/agent/deep/one/two/models.json" ok
+expect 'a link outside every follow root is not mounted' no \
+	"$home/.config/gh/hosts.yml:/home/node/.pi/agent/forge" ok
+expect_says 'and the run says why it was left out' 'link not followed (outside every follow root): agent/forge'
 
-exit "$failed"
+baseconf 'dir   ~/.pi'
+run
+expect 'with no follow root declared, no link under the directory is followed' no \
+	"$farm/pi/agent/models.json:/home/node/.pi/agent/models.json" ok
+expect_says 'and the run says the catalogue declares none' 'declares no follow root'
+
+baseconf "follow $farm    grant=LOCAL_BIN" 'dir   ~/.pi'
+run
+expect 'a follow root whose grant is off is not in force' no \
+	"$farm/pi/agent/models.json:/home/node/.pi/agent/models.json" ok
+expect_says 'and the run says the grant is off' 'grant off (LOCAL_BIN)'
+
+if [ "$failed" -eq 0 ]; then
+	printf 'sandbox-agent-mounts: ok\n'
+else
+	exit 1
+fi
