@@ -362,12 +362,8 @@ while read -r kind path opts; do
 
 	# An agent directory is a stow farm: the files inside it are symlinks into a
 	# checkout outside the container's copy of $HOME, so mounting the directory
-	# alone hands over dead links. pi reads its model list, its credentials and
-	# its settings through three of them and will not start without them, and the
-	# skills tree is symlinked the same way. Mount each target where its link
-	# resolves, which is the target's own host path. LOCAL_BIN is left out on
-	# purpose: its dangling links are the point, and a project that needs one of
-	# those binaries adds a MOUNTS line.
+	# alone hands over dead links and pi will not start. Mount each target where
+	# its link resolves. LOCAL_BIN is left out, its dangling links are the point.
 	if [ -n "$agent" ] && [ "$kind" = dir ]; then
 		while IFS= read -r -d '' link; do
 			target=$(readlink -f "$link") || continue
