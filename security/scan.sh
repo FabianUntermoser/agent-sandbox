@@ -68,9 +68,12 @@ fi
 } >"$out/scanner-versions.txt" 2>&1
 
 # What was scanned, and the image id it was read as. A caller with more context, the commit for a
-# build or the reference a manifest pins, writes this before calling here.
-if [ ! -f "$out/scan-target.txt" ]; then
-	printf '%s %s\n' "$ref" "$(docker image inspect --format '{{.Id}}' "$ref")" >"$out/scan-target.txt"
+# build, writes this before calling here and keeps it: the file is rewritten only when it does not
+# carry the id this scan just read, so a second run into the same directory cannot leave a report
+# labelled with the image of the first one.
+id=$(docker image inspect --format '{{.Id}}' "$ref")
+if [ ! -f "$out/scan-target.txt" ] || ! grep -qF -- "$id" "$out/scan-target.txt"; then
+	printf '%s %s\n' "$ref" "$id" >"$out/scan-target.txt"
 fi
 
 log scanning "$ref"
