@@ -18,6 +18,7 @@ help() {
 		  --manifest <path>          manifest to source instead of $PWD/.sandbox.conf; a path
 		                             outside the project lets one run use a generated manifest
 		  --new                      force a fresh container
+		  --name <container>         name the container instead of sandbox-<project>
 		  --network=host             share the host network namespace
 		  --offline                  bridge plus default-deny egress (the default)
 		  -v, --verbose              run without tmux
@@ -69,11 +70,16 @@ OFFLINE=
 STDIO=
 VERSION_PROBE=
 NETWORK_FLAG=
+NAME_FLAG=
 while [ "$#" -gt 0 ]; do
 	case "$1" in
 		-h|--help) help; exit ;;
 		--version) VERSION_PROBE=1; shift ;;
 		--new)     FORCE_NEW=1; shift ;;
+		--name)    [ -n "${2:-}" ] || die "--name needs a container name"
+		           NAME_FLAG=$2; shift 2 ;;
+		--name=*)  [ -n "${1#*=}" ] || die "--name needs a container name"
+		           NAME_FLAG=${1#*=}; shift ;;
 		--offline) OFFLINE=1; shift ;;
 		--network=*) NETWORK_FLAG=${1#*=}; shift ;;
 		--network) [ -n "${2:-}" ] || die "--network needs bridge or host"
@@ -128,6 +134,17 @@ KEY=$(printf '%s' "$WORK" | sed 's#[^a-zA-Z0-9]#-#g')
 PROJ="$HOME/.claude/projects/$KEY"
 mkdir -p "$PROJ/memory"
 NAME="sandbox-$(printf '%s' "${WORK##*/}" | sed 's#[^a-zA-Z0-9_.-]#-#g')"
+
+# An explicit name is the caller's: several containers for one project are told apart by name,
+# and only the caller knows which is which. It is used as given, so it has to be legal.
+if [ -n "$NAME_FLAG" ]; then
+	case "$NAME_FLAG" in
+		"" | [!a-zA-Z0-9]* | *[!a-zA-Z0-9_.-]*)
+			die "--name takes a docker container name, letters, digits, dot, dash or underscore: '$NAME_FLAG'"
+			;;
+	esac
+	NAME="$NAME_FLAG"
+fi
 
 # -- Pi project trust --------------------------------------------------------
 
@@ -188,8 +205,16 @@ if [ -z "$FORCE_NEW" ] && [ -z "$STDIO" ] && docker ps --format '{{.Names}}' | g
 	echo "Attaching to '$NAME' ('$prog --new' forces a fresh one)…" >&2
 	exec docker exec -it -e "COLORTERM=${COLORTERM:-truecolor}" -w "$WORK" "$NAME" "$@"
 fi
-n=2; base=$NAME
-while docker ps -a --format '{{.Names}}' | grep -qx "$NAME"; do NAME="$base-$n"; n=$((n+1)); done
+# A derived name steps aside for whatever already holds it. An explicit one is taken as given,
+# so a container already carrying it stops the run instead of pushing this one to a -2.
+if [ -n "$NAME_FLAG" ]; then
+	if docker ps -a --format '{{.Names}}' | grep -qx "$NAME"; then
+		die "container '$NAME' already exists; stop it first with: docker rm -f $NAME"
+	fi
+else
+	n=2; base=$NAME
+	while docker ps -a --format '{{.Names}}' | grep -qx "$NAME"; do NAME="$base-$n"; n=$((n+1)); done
+fi
 
 mounts=()
 
