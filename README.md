@@ -7,6 +7,10 @@ Sandbox container for AI agents (Claude, Codex, pi).
 - The sandbox mounts the project at its host path and nothing else. A host path arrives
   only through a `.sandbox.conf` grant, and `ro` makes that grant read-only in the
   container. A project without a manifest gets only its own tree, and prints a warning.
+- A linked worktree works without the checkout it belongs to: the sandbox mounts the worktree
+  and the git directory its `.git` file names, never the working tree around that directory.
+- Sibling worktrees stay out of each other's way: the admin directory git keeps for every other
+  worktree mounts read-only, so a run cannot write another worktree's index, HEAD or branch.
 - A symlink at the top of the project is resolved and its target mounted in its place,
   so a checkout that links a shared repo, an asset tree, or `~/notes/work/<project>`
   stays reachable. Symlinks nested deeper are not followed, and a target in the vault,
