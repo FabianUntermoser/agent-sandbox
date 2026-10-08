@@ -81,6 +81,10 @@ there. The reports land in `security-out/`, which git ignores.
 - Trivy ships a five minute analysis deadline. `security/scan.sh` passes `--timeout 30m`, because
   a scan that gives up leaves the image unscanned.
 - Both scanners are pinned by digest in `security/scan.sh`. A scanner that moves under the gate is
-  a scanner whose verdict means nothing.
+  a scanner whose verdict means nothing. A digest settles that the image is the same one on every
+  run, not who published it: verifying a signature with Cosign or Notation is the next step there.
+- The scanners hold `/var/run/docker.sock`, which is daemon-level authority over the machine that
+  runs them. Scanning an exported OCI archive would remove the need for the socket.
 - The Trivy database goes in a volume, which the CI job names once for both of its scans. Without
-  one, every scan fetches the database again.
+  one, every scan fetches the database again, so a local `make scan` fetches it twice where CI
+  fetches it once.
