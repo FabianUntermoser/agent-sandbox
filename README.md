@@ -201,6 +201,11 @@ BASE=full                 # the whole inherited set, the pre-deny-by-default san
 so an explicit grant in the same manifest still narrows it. A project that has not
 been migrated gets `BASE=full` first, then its own grants as it is tightened.
 
+## Security
+
+Every image this repository builds or pins is scanned, and a fixable high-severity finding fails
+the run. See [SECURITY.md](SECURITY.md).
+
 ## License
 
 MIT
