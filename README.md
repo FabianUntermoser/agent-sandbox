@@ -117,14 +117,14 @@ on the host can watch and instruct the agent in there.
 
 ```sh
 sandbox-panes.sh ls                    # containers, panes, agent state, cwd
-sandbox-panes.sh read stockis -n 60    # last 60 lines of its pane
-sandbox-panes.sh send stockis "run the test suite"
-sandbox-panes.sh wait stockis 300      # blocks until it stops working, prints the pane
-sandbox-panes.sh keys stockis Escape   # raw keys when send is not enough
+sandbox-panes.sh read myproject -n 60  # last 60 lines of its pane
+sandbox-panes.sh send myproject "run the test suite"
+sandbox-panes.sh wait myproject 300    # blocks until it stops working, prints the pane
+sandbox-panes.sh keys myproject Escape # raw keys when send is not enough
 ```
 
 `<target>` is `<container>[:<session>[.<window>[.<pane>]]]`, short container names
-work (`stockis`). Text goes through the tmux buffer, so dashes, quotes and newlines
+work (`myproject`). Text goes through the tmux buffer, so dashes, quotes and newlines
 survive. Container tmux is a separate server from the host one, the host sessions
 are never touched.
 

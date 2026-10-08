@@ -11,7 +11,7 @@
 # target names.
 #
 # <target> is <container>[:<session>][.<window>[.<pane>]], the container may be the
-# short form: 'stockis' finds 'sandbox-stockis-destillerie'. With one sandbox
+# short form: 'myproject' finds 'sandbox-myproject'. With one sandbox
 # running, the container part can be left out. A target without a pane picks
 # window 1 pane 1 of that session.
 set -euo pipefail
