@@ -19,6 +19,10 @@
 set -euo pipefail
 IFS=$'\n\t'
 
+# The public-address predicate is shared with the generator at build time.
+# shellcheck source=public-ip.sh
+source /usr/local/lib/public-ip.sh
+
 ## FLUSH
 
 # Flush ONLY the filter table (invariant #2). Drop leftover ipset.
@@ -56,6 +60,8 @@ if [[ -f /etc/allowlist-domains ]]; then
     [[ -n "$domain" ]] || continue
     ips=$(dig +short A "$domain" 2>/dev/null | grep -E '^[0-9.]+$' || true)
     for ip in $ips; do
+      # A resolver answering with a private or reserved address must not widen the boundary.
+      public_ipv4 "$ip" || continue
       ipset add allowed-domains "$ip" 2>/dev/null || true
     done
   done < /etc/allowlist-domains

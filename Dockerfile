@@ -74,6 +74,7 @@ RUN install -d -o $USERNAME -g $USERNAME /home/$USERNAME/.local/bin
 
 COPY scripts/init-firewall.sh /usr/local/bin/init-firewall.sh
 COPY scripts/generate-allowlist.sh /tmp/generate-allowlist.sh
+COPY scripts/public-ip.sh /usr/local/lib/public-ip.sh
 RUN chmod +x /usr/local/bin/init-firewall.sh /tmp/generate-allowlist.sh \
   && DOMAINS_FILE=/etc/allowlist-domains /tmp/generate-allowlist.sh > /etc/allowlist.sh \
   && rm /tmp/generate-allowlist.sh \
