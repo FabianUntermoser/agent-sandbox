@@ -43,3 +43,8 @@ for domain in "${ALLOWED_DOMAINS[@]}"; do
     echo "ipset -exist add allowed-domains $ip"
   done
 done
+
+# One domain per line, for the firewall to resolve again at start: a CDN host moves.
+if [ -n "${DOMAINS_FILE:-}" ]; then
+  printf '%s\n' "${ALLOWED_DOMAINS[@]}" >"$DOMAINS_FILE"
+fi
