@@ -6,9 +6,10 @@ check:
 	./scripts/public-ip.sh --self-check
 	./scripts/sandbox-manifest.test.sh
 
-# A real container: the worktree mount is what it proves, so it needs docker and the image.
+# Real containers: the mounts are what they prove, so they need docker and the image.
 worktree-check:
 	./scripts/sandbox-worktree.test.sh
+	./scripts/sandbox-worktree-siblings.test.sh
 
 setup:
 	./scripts/setup.sh

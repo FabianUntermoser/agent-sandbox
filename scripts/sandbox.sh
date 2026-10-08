@@ -414,6 +414,18 @@ if [ -f "$WORK/.git" ]; then
 	common=$(git -C "$WORK" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)
 	if [ -n "$common" ] && [ -d "$common" ]; then
 		add_mount "$common" "$common"
+		# Every other worktree keeps its index, HEAD and reflog in that same directory, and one
+		# run must not be able to write them. Each sibling admin directory is mounted read-only
+		# over the writable git directory above; this worktree's own stays writable through it.
+		own=$(git -C "$WORK" rev-parse --path-format=absolute --absolute-git-dir 2>/dev/null || true)
+		if [ -n "$own" ]; then
+			for sibling in "$common"/worktrees/*/; do
+				[ -d "$sibling" ] || continue
+				sibling=${sibling%/}
+				[ "$sibling" = "$own" ] && continue
+				add_mount "$sibling" "$sibling" ro
+			done
+		fi
 	fi
 fi
 
