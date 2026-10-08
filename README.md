@@ -173,7 +173,9 @@ make vm-status
 ## Per-project manifest
 
 Drop a `.sandbox.conf` in any project to grant what it needs. Every key defaults
-to off, and a project with no manifest gets only its own tree.
+to off, and a project with no manifest gets only its own tree. `--manifest <path>`
+sources a file outside the project instead, so one run can use a generated
+manifest while the project stays where it is.
 
 ```bash
 # .sandbox.conf, sourced by sandbox.sh (bash syntax)
