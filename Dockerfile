@@ -3,7 +3,7 @@
 # Dependencies grouped by agent so you can see what each needs.
 
 ARG NODE_VERSION=22-bookworm
-ARG NODE_DIGEST=sha256:5647be709086c696ff32edaaf1c70cd26d1da6ab2b39c32f3c7b4c4a31957e37
+ARG NODE_DIGEST=sha256:0e5f906573693feaa1e21057ebdcfdb5bd5021f050b2dc7c9deceb629c7da2a8
 
 FROM node:${NODE_VERSION}@${NODE_DIGEST}
 
@@ -32,7 +32,7 @@ RUN curl -fsSL https://ollama.com/install.sh | sh
 
 RUN <<EOT
 set -eux
-curl -fsSL https://gitlab.com/gitlab-org/cli/-/releases/v1.50.0/downloads/glab_1.50.0_linux_amd64.tar.gz \
+curl -fsSL https://gitlab.com/gitlab-org/cli/-/releases/v1.121.0/downloads/glab_1.121.0_linux_amd64.tar.gz \
   -o /tmp/glab.tar.gz
 tar -xzf /tmp/glab.tar.gz -C /usr/local/bin bin/glab
 rm /tmp/glab.tar.gz
