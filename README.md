@@ -58,7 +58,9 @@ sandbox.sh --network=host pi       # host network, for the host ollama
 ```
 
 Running `sandbox.sh` again in the same directory reattaches to the existing
-container. `--new` forces a fresh one.
+container. `--new` forces a fresh one, and `--name <container>` names the
+container instead of `sandbox-<project>`, which is what a caller that runs
+several containers for one project needs.
 
 ## Resume
 
