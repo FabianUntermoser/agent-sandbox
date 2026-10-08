@@ -6,6 +6,10 @@ check:
 	./scripts/public-ip.sh --self-check
 	./scripts/sandbox-manifest.test.sh
 
+# A real container: the worktree mount is what it proves, so it needs docker and the image.
+worktree-check:
+	./scripts/sandbox-worktree.test.sh
+
 setup:
 	./scripts/setup.sh
 
@@ -42,4 +46,4 @@ vm-pair:
 vm-destroy:
 	./vm/vworker.sh destroy --yes
 
-.PHONY: build check setup uninstall shell claude pi vm-create vm-start vm-stop vm-status vm-sync vm-pair vm-destroy
+.PHONY: build check worktree-check setup uninstall shell claude pi vm-create vm-start vm-stop vm-status vm-sync vm-pair vm-destroy

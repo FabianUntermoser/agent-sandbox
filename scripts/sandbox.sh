@@ -406,14 +406,14 @@ if [ -n "$STDIO" ]; then
 	unset argv
 fi
 
-# A worktree's .git is a file naming the main checkout's .git/worktrees/<slug>,
-# so without that checkout mounted every git call in the container resolves a
-# path that is not there. The worktree itself stays the working directory.
+# A worktree's .git is a file naming the main checkout's .git/worktrees/<slug>, whose
+# commondir reaches the object store and the refs. That git directory is what has to be
+# there, at its own path: mounting the checkout that holds it would hand the whole
+# working tree, and every file in it, to a sandbox that asked for one worktree.
 if [ -f "$WORK/.git" ]; then
 	common=$(git -C "$WORK" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)
-	main=${common%/.git}
-	if [ -n "$main" ] && [ -d "$main" ] && [ "$main" != "$WORK" ]; then
-		add_mount "$main" "$main"
+	if [ -n "$common" ] && [ -d "$common" ]; then
+		add_mount "$common" "$common"
 	fi
 fi
 
