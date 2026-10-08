@@ -360,17 +360,17 @@ while read -r kind path opts; do
 	*) die "unknown base entry kind '$kind' in $BASE_CONF" ;;
 	esac
 
-	# An agent directory is a stow farm: the files inside it are symlinks into a
-	# checkout outside the container's copy of $HOME, so mounting the directory
-	# alone hands over dead links and pi will not start. Mount each target where
-	# its link resolves. LOCAL_BIN is left out, its dangling links are the point.
+	# An agent directory is a stow farm: its files are symlinks into a checkout
+	# outside the container's copy of $HOME, so mounting the directory alone hands
+	# over dead links. Mount each target over the link, at the guest path the link
+	# already occupies, so the checkout itself stays out of the container.
 	if [ -n "$agent" ] && [ "$kind" = dir ]; then
 		while IFS= read -r -d '' link; do
 			target=$(readlink -f "$link") || continue
 			[ -n "$target" ] && [ -e "$target" ] || continue
 			denied "$target" && continue
-			add_mount "$target" "$target"
-		done < <(find "$path" -maxdepth 4 -type l -print0 2>/dev/null)
+			add_mount "$target" "/home/$RUSER/${link#"$HOME"/}"
+		done < <(find "$path" -maxdepth 3 -type l -print0 2>/dev/null)
 	fi
 done <"$BASE_CONF"
 

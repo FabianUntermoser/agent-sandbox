@@ -4,6 +4,7 @@ build:
 check:
 	bash -n scripts/*.sh
 	./scripts/public-ip.sh --self-check
+	./scripts/sandbox-agent-mounts.test.sh
 	./scripts/sandbox-manifest.test.sh
 	./scripts/sandbox-name.test.sh
 
