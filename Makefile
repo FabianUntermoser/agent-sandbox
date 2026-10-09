@@ -7,11 +7,20 @@ check:
 	./scripts/sandbox-agent-mounts.test.sh
 	./scripts/sandbox-manifest.test.sh
 	./scripts/sandbox-name.test.sh
+	./scripts/scan-digests.test.sh
 
 # Real containers: the mounts are what they prove, so they need docker and the image.
 worktree-check:
 	./scripts/sandbox-worktree.test.sh
 	./scripts/sandbox-worktree-siblings.test.sh
+
+# reports land in security-out/, which git ignores: they are evidence for a run, not for the repo
+scan: build
+	./security/scan.sh "$$(docker image inspect --format '{{.Id}}' agent-sandbox:latest)" security-out/agent-sandbox
+	./security/scan-digests.sh security-out
+
+gate:
+	./security/gate.sh security-out
 
 setup:
 	./scripts/setup.sh
@@ -49,4 +58,4 @@ vm-pair:
 vm-destroy:
 	./vm/vworker.sh destroy --yes
 
-.PHONY: build check worktree-check setup uninstall shell claude pi vm-create vm-start vm-stop vm-status vm-sync vm-pair vm-destroy
+.PHONY: build check worktree-check scan gate setup uninstall shell claude pi vm-create vm-start vm-stop vm-status vm-sync vm-pair vm-destroy
