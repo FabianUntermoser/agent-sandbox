@@ -7,11 +7,13 @@ check:
 	./scripts/sandbox-agent-mounts.test.sh
 	./scripts/sandbox-manifest.test.sh
 	./scripts/sandbox-name.test.sh
+	./scripts/sandbox-git-fence.test.sh
 
 # Real containers: the mounts are what they prove, so they need docker and the image.
 worktree-check:
 	./scripts/sandbox-worktree.test.sh
 	./scripts/sandbox-worktree-siblings.test.sh
+	./scripts/sandbox-git-hooks.test.sh
 
 setup:
 	./scripts/setup.sh
