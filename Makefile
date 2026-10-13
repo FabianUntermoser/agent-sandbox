@@ -12,6 +12,7 @@ check:
 worktree-check:
 	./scripts/sandbox-worktree.test.sh
 	./scripts/sandbox-worktree-siblings.test.sh
+	./scripts/sandbox-git-hooks.test.sh
 
 setup:
 	./scripts/setup.sh
