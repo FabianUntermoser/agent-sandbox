@@ -268,5 +268,33 @@ chk "the launch proceeds when a project symlink exposes it" "$rc" "0"
 chk "the symlink destination is mounted read-only" "$(mounts | grep -c "^$repo/hooks-link=ro$")" "1"
 chk "and no writable entry is left for it" "$(mounts | grep -c "^$repo/hooks-link=rw$" || true)" "0"
 
+printf '  the linked-worktree shape keeps its shared git directory read-only\n'
+main="$(fixture worktree-main)"
+wt="$T/wt-fence"
+git -C "$main" worktree add -q "$wt" -b fence-wt
+admin="$main/.git/worktrees/wt-fence"
+rc="$(launch "$wt")"
+chk "the launch proceeds" "$rc" "0"
+chk "the shared git directory is mounted read-only" "$(mounts | grep -c "^$main/.git=ro$")" "1"
+chk "only the parts a commit writes stay writable" \
+	"$(mounts | grep "^$main/.git/.*=rw$" | sed "s#^$main/.git/##; s#=rw##" | LC_ALL=C sort | tr '\n' ' ' | sed 's/ $//')" \
+	"$(printf '%s\n' logs objects refs worktrees/wt-fence | LC_ALL=C sort | tr '\n' ' ' | sed 's/ $//')"
+chk "the worktree's own commondir is read-only" "$(mounts | grep -c "^$admin/commondir=ro$")" "1"
+chk "the .git pointer file is read-only" "$(mounts | grep -c "^$wt/.git=ro$")" "1"
+chk "the shared hooks name is not writable" "$(mounts | grep -c "^$main/.git/hooks=rw$" || true)" "0"
+chk "the shared config name is not writable" "$(mounts | grep -c "^$main/.git/config=rw$" || true)" "0"
+
+printf '  a writable mount below a shared worktree surface refuses before docker\n'
+rc="$(launch "$wt" "$T/extra:$main/.git/hooks/nested")"
+if [ "$rc" = 0 ]; then
+	bad "a launch proceeded with a writable mount under the shared hooks directory"
+elif launched; then
+	bad "docker was invoked with a writable mount under a shared worktree surface"
+elif grep -q 'fenced read-only' "$T/out"; then
+	ok "a writable mount below a shared worktree surface is refused before docker"
+else
+	bad "the refusal did not say why: $(tail -2 "$T/out")"
+fi
+
 printf '\n%d ok, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ] && echo "sandbox-git-fence: ok"
