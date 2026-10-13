@@ -269,4 +269,4 @@ chk "the symlink destination is mounted read-only" "$(mounts | grep -c "^$repo/h
 chk "and no writable entry is left for it" "$(mounts | grep -c "^$repo/hooks-link=rw$" || true)" "0"
 
 printf '\n%d ok, %d failed\n' "$pass" "$fail"
-[ "$fail" -eq 0 ]
+[ "$fail" -eq 0 ] && echo "sandbox-git-fence: ok"
