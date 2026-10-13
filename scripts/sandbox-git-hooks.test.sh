@@ -76,6 +76,7 @@ must_pass "the hooks directory is readable" test -d "$hooks"
 # this checkout, and a writable config is enough to point git at a hooks directory the sandbox owns.
 must_fail "a hook planted in the hooks directory" sh -c "printf '#!/bin/sh\ntouch \"$0.executed\"\n' >'$hooks/pre-commit' && chmod +x '$hooks/pre-commit'"
 must_fail "a hook path appended to the config" sh -c "printf '\n[core]\n\thooksPath = .\n' >>'$config'"
+must_fail "a commondir written into the git directory" sh -c "printf '/tmp\n' >'$(git rev-parse --git-path commondir)'"
 must_fail "a hook planted at the hooks path the operator configured" sh -c "printf '#!/bin/sh\nexit 0\n' >.githooks/pre-commit"
 
 [ "$reached" -eq 0 ]
@@ -170,6 +171,11 @@ run "linked worktree" "$wt"
 expect "$hooks_listing" "$(ls -A "$main/.git/hooks" 2>/dev/null)" "the host hooks directory is unchanged"
 expect "$config_hash" "$(sha256sum "$main/.git/config" | cut -d' ' -f1)" "the host git config is unchanged"
 expect "$githooks_hash" "$(sha256sum "$main/.githooks/README" | cut -d' ' -f1)" "the operator hooks directory is unchanged"
+# commondir is the name a sandbox could use to send git at a git directory it wrote, so it is written
+# to name the git directory itself before the sandbox starts and mounted back read-only.
+expect "$main/.git" "$(cat "$main/.git/commondir" 2>/dev/null)" "the plain checkout's git directory names itself as its common directory"
+expect "$main/.git" "$(git -C "$main" rev-parse --git-common-dir 2>/dev/null)" "the host resolves the plain checkout's common directory"
+expect "$main/.git" "$(git -C "$wt" rev-parse --git-common-dir 2>/dev/null)" "the host resolves the worktree's common directory"
 expect "README pre-commit" "$(ls -A "$main/.githooks" | LC_ALL=C sort | tr '\n' ' ' | sed 's/ $//')" "the operator hooks directory holds only what it held"
 expect ".githooks" "$(git -C "$main" config --get core.hooksPath)" "the host still points at its own hooks directory"
 

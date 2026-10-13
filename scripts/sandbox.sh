@@ -265,6 +265,19 @@ drop_mount() { # <destination>
 
 unfenced() { printf '  \033[33mnot fenced:\033[0m %s does not exist yet, so a sandbox could create it\n' "$1" >&2; }
 
+# commondir points git at another common directory. A git directory that has none is its own common
+# directory, and that is what the file is given when it is missing: one line written by the launcher
+# rather than a mount, because a mount onto a name that does not exist makes docker create it in the
+# host checkout, and a name a sandbox can create is a name it can aim at a git directory it wrote.
+# What git resolves to by default is written, so nothing changes for git and the name is covered.
+fence_commondir() { # <git dir>
+	local path="$1/commondir"
+	if [ ! -f "$path" ]; then
+		printf '%s\n' "$1" >"$path" 2>/dev/null || { unfenced "$path"; return 0; }
+	fi
+	add_mask_file "$path"
+}
+
 add_mask_dir() { # <path>: read-only where the directory is there, named where it is not
 	local path=$1
 	[ -d "$path" ] || { unfenced "$path"; return 0; }
@@ -549,9 +562,7 @@ fence_git_surfaces() { # <git dir> <working tree>
 	local gitdir=$1 work=$2
 	add_mask_file "$gitdir/config"
 	add_mask_file "$gitdir/config.worktree"
-	# commondir points git at another common directory: a writable one selects a git directory the
-	# sandbox writes itself, hooks and config included.
-	add_mask_file "$gitdir/commondir"
+	fence_commondir "$gitdir"
 	add_mask_dir "$gitdir/hooks"
 	fence_modules "$gitdir"
 	fence_hooks_path "$work" "$gitdir"
@@ -565,6 +576,7 @@ fence_modules() { # <git dir>: a submodule keeps its own git directory, and its 
 		dir=${dir%/}
 		add_mask_file "$dir/config"
 		add_mask_dir "$dir/hooks"
+		fence_commondir "$dir"
 		fence_modules "$dir"
 	done
 	return 0
@@ -615,7 +627,7 @@ if [ -f "$WORK/.git" ]; then
 			# of a commit live in it. Its two pointer files are the exception.
 			add_mount "$own" "$own"
 			add_mask_file "$own/config.worktree"
-			add_mask_file "$own/commondir"
+			fence_commondir "$own"
 		fi
 		fence_hooks_path "$WORK" "$common"
 	fi
@@ -624,9 +636,7 @@ if [ -f "$WORK/.git" ]; then
 	add_mask_file "$WORK/.git"
 elif [ -d "$WORK/.git" ]; then
 	# A plain checkout: the project mount above covers .git, so the names git follows inside it are
-	# fenced where they exist. The git directory root stays writable because a commit creates its lock
-	# file there, so a name that does not exist yet cannot be fenced in this shape: it is reported, and
-	# the linked worktree shape does not have the problem (the shared directory is read-only there).
+	# fenced. Its root stays writable because a commit creates its lock and message files there.
 	fence_git_surfaces "$WORK/.git" "$WORK"
 fi
 
