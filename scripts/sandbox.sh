@@ -238,11 +238,8 @@ add_mount() {
 mount_dir()  { if [ -d "$1" ]; then add_mount "$1" "$2" "${3:-}"; fi; }
 mount_file() { if [ -f "$1" ]; then add_mount "$1" "$2" "${3:-}"; fi; }
 
-# An execution surface is fenced where it exists. A name that does not exist yet is reported and
-# left alone: a bind mount onto a missing destination under the project mount makes docker create
-# that name in the host checkout, as root, and an empty `commondir` alone breaks git on the host.
-# A mask also drops any grant already on that destination, because add_mount keeps one mount per
-# destination and a project MOUNTS entry naming a git execution surface must not shadow the mask.
+# A fence drops any grant already on its destination, because add_mount keeps one mount per
+# destination and a project MOUNTS entry naming a git execution surface must not shadow the fence.
 drop_mount() { # <destination>
 	local i spec dst
 	local -a kept=()
@@ -612,9 +609,9 @@ fi
 # writable config is enough to point core.hooksPath at a directory the sandbox owns. Every one of
 # those surfaces is mounted back read-only. Git still reads all of them, so history, the hooks the
 # operator installed and commits keep working: only writing stops.
-# The names a sandbox could hand the host to run. Each is mounted back read-only where it exists, so
-# history, the hooks the operator installed and commits keep working and only writing stops. A name
-# that does not exist yet is reported instead: a mount onto it would create it in the host checkout.
+# The names a sandbox could hand the host to run. Each is mounted back read-only, and a name that is
+# not there yet is created and fenced by the helpers above, so history, the hooks the operator
+# installed and commits keep working and only writing stops.
 fence_git_surfaces() { # <git dir> <working tree>
 	local gitdir=$1 work=$2
 	add_mask_file "$gitdir/config"
