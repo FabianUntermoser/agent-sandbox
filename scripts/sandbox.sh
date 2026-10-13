@@ -263,33 +263,90 @@ drop_mount() { # <destination>
 	return 0
 }
 
-unfenced() { printf '  \033[33mnot fenced:\033[0m %s does not exist yet, so a sandbox could create it\n' "$1" >&2; }
+# A fence is not a hint: every name is covered, or the run does not start. A name that is not a plain
+# file or directory is refused rather than written through, because a symlink takes the write
+# somewhere else, and a sandbox can create any name the host has not.
+protected=()
 
-# commondir points git at another common directory. A git directory that has none is its own common
-# directory, and that is what the file is given when it is missing: one line written by the launcher
-# rather than a mount, because a mount onto a name that does not exist makes docker create it in the
-# host checkout, and a name a sandbox can create is a name it can aim at a git directory it wrote.
-# What git resolves to by default is written, so nothing changes for git and the name is covered.
+add_mask_dir() { # <path> <what>
+	local path=$1 what=${2:-git state}
+	if [ -L "$path" ] || { [ -e "$path" ] && [ ! -d "$path" ]; }; then
+		die "refusing to launch: $what at $path is not a directory"
+	fi
+	if [ ! -d "$path" ]; then
+		mkdir -p "$path" 2>/dev/null || die "refusing to launch: cannot create $what at $path"
+	fi
+	drop_mount "$path"
+	add_mount "$path" "$path" ro
+	protected+=("$path")
+	[ -d "$path" ] || die "refusing to launch: $what at $path is not a directory"
+}
+
+add_mask_file() { # <path> <what>
+	local path=$1 what=${2:-git state}
+	if [ -L "$path" ] || { [ -e "$path" ] && [ ! -f "$path" ]; }; then
+		die "refusing to launch: $what at $path is not a regular file"
+	fi
+	if [ ! -f "$path" ]; then
+		( set -C; : >"$path" ) 2>/dev/null || die "refusing to launch: cannot create $what at $path"
+	fi
+	drop_mount "$path"
+	add_mount "$path" "$path" ro
+	protected+=("$path")
+	[ -f "$path" ] || die "refusing to launch: $what at $path is not a regular file"
+}
+
+# commondir points git at another common directory, and a git directory that has none is its own
+# common directory. That is what the file is given: one line written by the launcher rather than a
+# mount, because a mount onto a name that does not exist makes docker create it in the host checkout,
+# and a name a sandbox can create is a name it can aim at a git directory it wrote.
 fence_commondir() { # <git dir>
 	local path="$1/commondir"
-	if [ ! -f "$path" ]; then
-		printf '%s\n' "$1" >"$path" 2>/dev/null || { unfenced "$path"; return 0; }
+	if [ -L "$path" ] || { [ -e "$path" ] && [ ! -f "$path" ]; }; then
+		die "refusing to launch: the common directory pointer at $path is not a regular file"
 	fi
-	add_mask_file "$path"
+	if [ ! -f "$path" ]; then
+		printf '%s\n' "$1" >"$path" 2>/dev/null ||
+			die "refusing to launch: cannot write the common directory pointer at $path"
+	fi
+	add_mask_file "$path" "the common directory pointer"
 }
 
-add_mask_dir() { # <path>: read-only where the directory is there, named where it is not
-	local path=$1
-	[ -d "$path" ] || { unfenced "$path"; return 0; }
-	drop_mount "$path"
-	add_mount "$path" "$path" ro
+# A worktree config is a third place a hooks path can be chosen, and git reads it only when the shared
+# config turns the extension on. That config is read-only here and a run with the extension already on
+# is refused, so a name that does not exist yet is inert and is left alone rather than created.
+add_mask_file_if_present() { # <path> <what>
+	[ -e "$1" ] || [ -L "$1" ] || return 0
+	add_mask_file "$1" "${2:-git state}"
 }
 
-add_mask_file() { # <path>: read-only where the file is there, named where it is not
-	local path=$1
-	[ -f "$path" ] || { unfenced "$path"; return 0; }
-	drop_mount "$path"
-	add_mount "$path" "$path" ro
+# A mount that exposes a hook path keeps its place in the set, read-only instead: the container may
+# still read what the operator put there, and cannot write a hook through it. The destination is what
+# is fenced, because that is the path the container writes through, symlink or not.
+fence_mount_destination() { # <destination> <source>
+	drop_mount "$1"
+	add_mount "$2" "$1" ro
+	protected+=("$1")
+}
+
+# The fence is worth what the final mount set says. A writable entry at or under a fenced name puts
+# that name back in reach, and the entry can come from a manifest MOUNTS line or a project symlink,
+# so the whole set is checked once it is complete.
+validate_mounts() {
+	local i spec dst mode p
+	for ((i = 0; i < ${#mounts[@]}; i += 2)); do
+		spec=${mounts[i + 1]}
+		dst=${spec#*:}
+		dst=${dst%%:*}
+		mode=${spec##*:}
+		[ "$mode" = ro ] && continue
+		for p in "${protected[@]}"; do
+			case "$dst" in
+			"$p" | "$p"/*) die "refusing a writable mount at $dst: $p is fenced read-only" ;;
+			esac
+		done
+	done
+	return 0
 }
 
 # The project comes first: it owns its own destination. It goes through the same
@@ -561,7 +618,7 @@ fi
 fence_git_surfaces() { # <git dir> <working tree>
 	local gitdir=$1 work=$2
 	add_mask_file "$gitdir/config"
-	add_mask_file "$gitdir/config.worktree"
+	add_mask_file_if_present "$gitdir/config.worktree" "the worktree config"
 	fence_commondir "$gitdir"
 	add_mask_dir "$gitdir/hooks"
 	fence_modules "$gitdir"
@@ -585,22 +642,58 @@ fence_modules() { # <git dir>: a submodule keeps its own git directory, and its 
 # core.hooksPath is the operator's own setting. Where it points inside the mounted trees, that target
 # is an execution surface exactly like hooks/, and is fenced the same way.
 fence_hooks_path() { # <working tree> <git dir>
-	local work=$1 gitdir=$2 path literal resolved
+	local work=$1 gitdir=$2 path literal resolved spec dst i exposed=0
 	path=$(git -C "$work" config --get core.hooksPath 2>/dev/null || true)
 	[ -n "$path" ] || return 0
-	# A relative value resolves against the working tree, which is what git does with it.
-	case "$path" in /*) literal=$path ;; *) literal="$work/$path" ;; esac
+	# Git resolves this like any pathname: `~` is the home directory, a relative value sits under the
+	# working tree. Reading it any other way would fence the wrong directory.
+	case "$path" in
+	"~") literal="$HOME" ;;
+	"~/"*) literal="$HOME/${path#\~/}" ;;
+	"~"*) return 0 ;; # ~user resolves out of the passwd database, outside every mount
+	/*) literal=$path ;;
+	*) literal="$work/$path" ;;
+	esac
 	resolved=$(readlink -f "$literal" 2>/dev/null || true)
 	[ -n "$resolved" ] || resolved=$literal
 	case "$resolved" in
 	"$work" | "$gitdir")
-		# Fencing the checkout or the git directory itself read-only would stop every commit, and the
-		# hook files inside them cannot be covered one by one. Rare and specific enough to refuse.
 		die "core.hooksPath points at $resolved itself, which cannot be fenced without making it read-only; point it at a directory of its own" ;;
 	"$work"/* | "$gitdir"/*)
-		add_mask_dir "$resolved" ;;
+		add_mask_dir "$resolved" "the hooks path"
+		return 0 ;;
 	esac
-	return 0
+	# Outside the trees it is only an execution surface when the mount set exposes it, and a mount can
+	# expose it either at its own path or at a symlink to it: both are collected before any of them is
+	# fenced, because fencing rebuilds the mount list.
+	local -a expose=() under_rw=0
+	for ((i = 0; i < ${#mounts[@]}; i += 2)); do
+		spec=${mounts[i + 1]}
+		src=${spec%%:*}
+		dst=${spec#*:}
+		dst=${dst%%:*}
+		real=$(readlink -f "$dst" 2>/dev/null || true)
+		[ -n "$real" ] || real=$dst
+		case "$real" in
+		"$resolved" | "$resolved"/*) expose+=("$dst:$src") ;;
+		esac
+		case "$resolved" in
+		"$dst" | "$dst"/*) under_rw=1 ;;
+		esac
+	done
+	if [ "${#expose[@]}" -gt 0 ]; then
+		exposed=1
+		for spec in "${expose[@]}"; do
+			fence_mount_destination "${spec%%:*}" "${spec#*:}"
+		done
+	fi
+	# Under a writable parent mount the target is reachable at its own path, so it takes a fence there
+	# too: a nested read-only mount wins over the parent it sits in.
+	if [ "$under_rw" = 1 ]; then
+		exposed=1
+		add_mask_dir "$resolved" "the exposed hooks path"
+	fi
+	[ "$exposed" = 1 ] || return 0
 }
 
 # A worktree config is a third place a hooks path can be chosen, and git reads it only when the
@@ -626,9 +719,10 @@ if [ -f "$WORK/.git" ]; then
 			# This worktree's own admin directory has to stay writable: the index, HEAD and the reflog
 			# of a commit live in it. Its two pointer files are the exception.
 			add_mount "$own" "$own"
-			add_mask_file "$own/config.worktree"
+			add_mask_file_if_present "$own/config.worktree" "the worktree config"
 			fence_commondir "$own"
 		fi
+		protected+=("$common/hooks" "$common/config" "$common/config.worktree" "$common/commondir")
 		fence_hooks_path "$WORK" "$common"
 	fi
 	# The pointer file names the git directory git uses from here on, and it sits inside the writable
@@ -639,6 +733,8 @@ elif [ -d "$WORK/.git" ]; then
 	# fenced. Its root stays writable because a commit creates its lock and message files there.
 	fence_git_surfaces "$WORK/.git" "$WORK"
 fi
+
+validate_mounts
 
 TTY_FLAG="-t"
 if [ -n "$STDIO" ]; then
