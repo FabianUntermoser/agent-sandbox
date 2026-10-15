@@ -2,6 +2,7 @@
 
 # USAGE: public_ipv4 <address>  - true when the address is a public IPv4 destination
 #        public_cidr <cidr>     - true when the whole range stays in public IPv4 space
+#        private_ipv4 <address> - true when the address is in the private space this host routes to
 #        public_ipv4 --self-check   - run the cases below
 #
 # Sourced by the allowlist generator and by the firewall. A name that is resolved at start comes
@@ -71,6 +72,37 @@ public_ipv4() {
   public_cidr "${1:-}/32"
 }
 
+# The private space this host can route to, which is where a tailnet or a LAN node lives. A host
+# service the manifest names by host:port is resolved when the sandbox starts, and an answer in this
+# space is opened the way a public one is. Loopback and link-local are in neither list, so an answer
+# that points at the container's own host or at the metadata service is refused however it arrives.
+private_ipv4_blocks=(
+  10.0.0.0/8      # private
+  100.64.0.0/10   # carrier-grade NAT, the range a tailnet address comes from
+  172.16.0.0/12   # private
+  192.168.0.0/16  # private
+)
+
+private_cidr() {
+  local cidr=${1:-} first last block bfirst blast
+  _cidr_bounds "$cidr" || return 1
+  first=$_first
+  last=$_last
+  for block in "${private_ipv4_blocks[@]}"; do
+    _cidr_bounds "$block" || continue
+    bfirst=$_first
+    blast=$_last
+    if ((first >= bfirst && last <= blast)); then
+      return 0
+    fi
+  done
+  return 1
+}
+
+private_ipv4() {
+  private_cidr "${1:-}/32"
+}
+
 # Cases run with `public_ipv4 --self-check`, so a change here has to face them.
 if [[ ${1:-} == --self-check ]]; then
   failed=0
@@ -93,6 +125,17 @@ if [[ ${1:-} == --self-check ]]; then
       printf '  ok    %-22s %s\n' "$cidr" "$want"
     else
       printf '  FAIL  %-22s wanted %s, got %s\n' "$cidr" "$want" "$got" >&2
+      failed=1
+    fi
+  }
+  check_private() {
+    local want=$1 ip=$2
+    local got=no
+    private_ipv4 "$ip" && got=yes
+    if [[ $got == "$want" ]]; then
+      printf '  ok    %-22s private %s\n' "$ip" "$want"
+    else
+      printf '  FAIL  %-22s wanted private %s, got %s\n' "$ip" "$want" "$got" >&2
       failed=1
     fi
   }
@@ -121,6 +164,17 @@ if [[ ${1:-} == --self-check ]]; then
     198.51.100.0/24 203.0.113.0/24 224.0.0.0/4 240.0.0.0/4 255.255.255.255/32 10.0.0.0/32 "" 1.2.3.0 \
     1.2.3.0/ 1.2.3.0/33 1.2.3.0/24x 1.2.3.0/abc 999.0.0.0/8 2a06:98c1:58::f3/48; do
     check_cidr no "$cidr"
+  done
+
+  echo "the private space this host routes to is admitted:"
+  for ip in 10.0.0.1 10.255.255.255 172.16.0.1 172.31.255.255 192.168.1.1 100.64.0.1 100.127.255.255; do
+    check_private yes "$ip"
+  done
+
+  echo "loopback, link-local, public and malformed are not private:"
+  for ip in 127.0.0.1 169.254.169.254 1.1.1.1 8.8.8.8 172.15.255.255 172.32.0.1 192.167.1.1 \
+    192.169.1.1 0.0.0.0 100.63.255.255 100.128.0.1 999.1.1.1 1.2.3 2a06:98c1:58::f3; do
+    check_private no "$ip"
   done
 
   [[ $failed == 0 ]] && echo "public-ip: ok"

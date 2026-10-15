@@ -2,7 +2,7 @@
 
 # USAGE: default-deny egress firewall for agent sandbox container
 #
-# Optional args name host services to open on the container's own gateway: ollama.
+# Optional args name host services to open: ollama, or <host>:<port>.
 #
 # Two correctness invariants are baked in here, do not "simplify" them away:
 #  (1) Policies are reset to ACCEPT right after the flush so a re-run can still
@@ -90,19 +90,54 @@ fi
 iptables -A INPUT  -m state --state ESTABLISHED,RELATED -j ACCEPT
 iptables -A OUTPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
 
-# Host services are opt-in: only a granted service's port on this container's own
-# gateway is opened. The docker subnet itself stays closed, so a sibling container
-# on the same network is not reachable.
+# Host services are opt-in: a granted name opens that service's port on this container's own
+# gateway, a granted `<host>:<port>` entry opens one address the host routes to, on that port
+# alone. The docker subnet itself stays closed, so a sibling container on the same network is
+# not reachable.
 GW=$(ip route | awk '/^default/ {print $3; exit}')
+svc_refused=0
 for svc in "$@"; do
   case "$svc" in
-  ollama) svc_ports=(11434) ;;
-  *) echo "error: unknown host service '$svc'" >&2; exit 1 ;;
+  ollama)
+    if [[ -n "$GW" ]]; then
+      iptables -A OUTPUT -d "$GW" -p tcp --dport 11434 -j ACCEPT
+    fi
+    ;;
+  *:*)
+    # A name arrives here rather than as an address because the address behind it moves, so it is
+    # resolved at start, the way an allowlisted domain is. The answer is checked before it is
+    # opened: only a public or private destination is reached, so a poisoned or broken answer
+    # cannot aim the grant at the container's own loopback or at the link-local metadata service.
+    svc_host=${svc%:*}
+    svc_port=${svc##*:}
+    if ! [[ $svc_host =~ ^[A-Za-z0-9._-]+$ && $svc_port =~ ^[0-9]{1,5}$ ]] ||
+      ((10#$svc_port < 1 || 10#$svc_port > 65535)); then
+      echo "error: host service '$svc' is not a <host>:<port> entry" >&2
+      exit 1
+    fi
+    opened=0
+    while read -r ip; do
+      [[ -n "$ip" ]] || continue
+      if ! public_ipv4 "$ip" && ! private_ipv4 "$ip"; then
+        svc_refused=$((svc_refused + 1))
+        continue
+      fi
+      iptables -A OUTPUT -d "$ip" -p tcp --dport "$svc_port" -j ACCEPT
+      opened=$((opened + 1))
+    done < <(dig +short A "$svc_host" 2>/dev/null | grep -E '^[0-9.]+$' || true)
+    if ((opened == 0)); then
+      echo "  WARN: host service '$svc' resolved to no address that may be opened" >&2
+    fi
+    ;;
+  *)
+    echo "error: unknown host service '$svc'" >&2
+    exit 1
+    ;;
   esac
-  for p in "${svc_ports[@]}"; do
-    [[ -n "$GW" ]] && iptables -A OUTPUT -d "$GW" -p tcp --dport "$p" -j ACCEPT
-  done
 done
+if ((svc_refused > 0)); then
+  echo "  WARN: refused $svc_refused host service address(es) outside public and private space" >&2
+fi
 
 # Allowlist
 iptables -A OUTPUT -m set --match-set allowed-domains dst -j ACCEPT
