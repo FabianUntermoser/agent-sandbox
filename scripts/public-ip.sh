@@ -72,15 +72,14 @@ public_ipv4() {
   public_cidr "${1:-}/32"
 }
 
-# The private space this host can route to, which is where a tailnet or a LAN node lives. A host
-# service the manifest names by host:port is resolved when the sandbox starts, and an answer in this
-# space is opened the way a public one is. Loopback and link-local are in neither list, so an answer
-# that points at the container's own host or at the metadata service is refused however it arrives.
+# The private space this host routes to, where a tailnet or a LAN node lives. A host service the
+# manifest names by host:port is resolved when the sandbox starts, and an answer in here is opened
+# the way a public one is.
 private_ipv4_blocks=(
-  10.0.0.0/8      # private
-  100.64.0.0/10   # carrier-grade NAT, the range a tailnet address comes from
-  172.16.0.0/12   # private
-  192.168.0.0/16  # private
+  10.0.0.0/8
+  100.64.0.0/10
+  172.16.0.0/12
+  192.168.0.0/16
 )
 
 private_cidr() {

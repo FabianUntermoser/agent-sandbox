@@ -90,10 +90,8 @@ fi
 iptables -A INPUT  -m state --state ESTABLISHED,RELATED -j ACCEPT
 iptables -A OUTPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
 
-# Host services are opt-in: a granted name opens that service's port on this container's own
-# gateway, a granted `<host>:<port>` entry opens one address the host routes to, on that port
-# alone. The docker subnet itself stays closed, so a sibling container on the same network is
-# not reachable.
+# Host services are opt-in: a granted name opens its port on this container's own gateway, a
+# granted <host>:<port> entry opens one address the host routes to, on that port alone.
 GW=$(ip route | awk '/^default/ {print $3; exit}')
 svc_refused=0
 for svc in "$@"; do
@@ -104,10 +102,9 @@ for svc in "$@"; do
     fi
     ;;
   *:*)
-    # A name arrives here rather than as an address because the address behind it moves, so it is
-    # resolved at start, the way an allowlisted domain is. The answer is checked before it is
-    # opened: only a public or private destination is reached, so a poisoned or broken answer
-    # cannot aim the grant at the container's own loopback or at the link-local metadata service.
+    # The answer moves, so the name is resolved here rather than in the allowlist. Only a public or
+    # private destination is opened, so a poisoned answer cannot aim the grant at loopback or at the
+    # link-local metadata service.
     svc_host=${svc%:*}
     svc_port=${svc##*:}
     if ! [[ $svc_host =~ ^[A-Za-z0-9._-]+$ && $svc_port =~ ^[0-9]{1,5}$ ]] ||
