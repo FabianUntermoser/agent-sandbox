@@ -35,7 +35,7 @@ help() {
 		  MOUNTS=(...)               extra host paths
 		  NETWORK=host               host networking (default: bridge + firewall)
 		  HOST_SERVICES=ollama       open the host gateway on 11434
-		  HOST_SERVICES=host:port    open that address through the host, on that port
+		  HOST_SERVICES=name:443     open that name through the host, on that port
 	EOF
 }
 

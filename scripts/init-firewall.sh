@@ -23,6 +23,26 @@ IFS=$'\n\t'
 # shellcheck source=public-ip.sh
 source /usr/local/lib/public-ip.sh
 
+## ARGS
+
+# Checked before the firewall is touched: the policies below sit at ACCEPT until the allowlist
+# exists, so an entry that is refused there would leave the container open. A run with one stops
+# here instead, with the ruleset it already had.
+for svc in "$@"; do
+  case "$svc" in
+  ollama) ;;
+  *:*) svc_port=${svc##*:}
+       if ! [[ ${svc%:*} =~ ^[A-Za-z0-9._-]+$ && $svc_port =~ ^[0-9]{1,5}$ ]] ||
+         ((10#$svc_port < 1 || 10#$svc_port > 65535)); then
+         echo "error: host service '$svc' is not a <host>:<port> entry" >&2
+         exit 1
+       fi
+       ;;
+  *) echo "error: unknown host service '$svc'" >&2
+     exit 1 ;;
+  esac
+done
+
 ## FLUSH
 
 # Flush ONLY the filter table (invariant #2). Drop leftover ipset.
@@ -91,7 +111,20 @@ iptables -A INPUT  -m state --state ESTABLISHED,RELATED -j ACCEPT
 iptables -A OUTPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
 
 # Host services are opt-in: a granted name opens its port on this container's own gateway, a
-# granted <host>:<port> entry opens one address the host routes to, on that port alone.
+# granted <host>:<port> entry opens the addresses the name answers with, on that port alone. An
+# answer on the container's own links is refused, so the docker subnet stays closed and a grant
+# names a service off the network, never a sibling container or the gateway.
+on_local_net() {
+  local net
+  while read -r net; do
+    [[ -n "$net" ]] || continue
+    if in_cidr "$1" "$net"; then
+      return 0
+    fi
+  done < <(ip -4 -o addr show scope global | awk '{print $4}')
+  return 1
+}
+
 GW=$(ip route | awk '/^default/ {print $3; exit}')
 svc_refused=0
 for svc in "$@"; do
@@ -106,15 +139,14 @@ for svc in "$@"; do
     # private destination is opened, so a poisoned answer cannot aim the grant at loopback or at the
     # link-local metadata service.
     svc_host=${svc%:*}
-    svc_port=${svc##*:}
-    if ! [[ $svc_host =~ ^[A-Za-z0-9._-]+$ && $svc_port =~ ^[0-9]{1,5}$ ]] ||
-      ((10#$svc_port < 1 || 10#$svc_port > 65535)); then
-      echo "error: host service '$svc' is not a <host>:<port> entry" >&2
-      exit 1
-    fi
+    svc_port=$((10#${svc##*:}))
     opened=0
     while read -r ip; do
       [[ -n "$ip" ]] || continue
+      if on_local_net "$ip"; then
+        svc_refused=$((svc_refused + 1))
+        continue
+      fi
       if ! public_ipv4 "$ip" && ! private_ipv4 "$ip"; then
         svc_refused=$((svc_refused + 1))
         continue
@@ -126,14 +158,10 @@ for svc in "$@"; do
       echo "  WARN: host service '$svc' resolved to no address that may be opened" >&2
     fi
     ;;
-  *)
-    echo "error: unknown host service '$svc'" >&2
-    exit 1
-    ;;
   esac
 done
 if ((svc_refused > 0)); then
-  echo "  WARN: refused $svc_refused host service address(es) outside public and private space" >&2
+  echo "  WARN: refused $svc_refused host service address(es) on the container's own network or outside public and private space" >&2
 fi
 
 # Allowlist

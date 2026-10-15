@@ -72,6 +72,19 @@ public_ipv4() {
   public_cidr "${1:-}/32"
 }
 
+# <address> inside <cidr>, the containment test the predicates are built on.
+in_cidr() {
+  local cidr=${1:-} net=${2:-} first last nfirst nlast
+  [[ $cidr == */* ]] || cidr=$cidr/32
+  _cidr_bounds "$cidr" || return 1
+  first=$_first
+  last=$_last
+  _cidr_bounds "$net" || return 1
+  nfirst=$_first
+  nlast=$_last
+  ((first >= nfirst && last <= nlast))
+}
+
 # The private space this host routes to, where a tailnet or a LAN node lives. A host service the
 # manifest names by host:port is resolved when the sandbox starts, and an answer in here is opened
 # the way a public one is.
@@ -83,15 +96,9 @@ private_ipv4_blocks=(
 )
 
 private_cidr() {
-  local cidr=${1:-} first last block bfirst blast
-  _cidr_bounds "$cidr" || return 1
-  first=$_first
-  last=$_last
+  local cidr=${1:-} block
   for block in "${private_ipv4_blocks[@]}"; do
-    _cidr_bounds "$block" || continue
-    bfirst=$_first
-    blast=$_last
-    if ((first >= bfirst && last <= blast)); then
+    if in_cidr "$cidr" "$block"; then
       return 0
     fi
   done

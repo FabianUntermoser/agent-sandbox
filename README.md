@@ -28,11 +28,12 @@ Sandbox container for AI agents (Claude, Codex, pi).
   GitLab, npm, PyPI, ollama, and more). A sibling container is not reachable.
   `--network=host` or `NETWORK=host` opts out.
 - `HOST_SERVICES=ollama` opens the host gateway on port 11434, and `HOST_SERVICES=<host>:<port>`
-  opens one address the host routes to, on that port alone. The name is resolved when the sandbox
-  starts, and the answer is opened only when it is a public or a private destination, so the grant
-  cannot be aimed at the container's own host or at the metadata service. Nothing else on the host
-  or the sandbox network is reachable. A service on a tailnet or a LAN needs the second form and
-  no host networking. The host ollama binds `127.0.0.1`, so pi's ollama models need `NETWORK=host`.
+  opens the addresses that name answers with, on that port alone. The name is resolved when the
+  sandbox starts, an answer on the container's own network is refused, and the rest is opened only
+  when it is a public or a private destination, so the grant cannot be aimed at the container's own
+  host, at a sibling container or at the metadata service. Nothing else on the host or the sandbox
+  network is reachable. A service on a tailnet or a LAN needs the second form and no host
+  networking. The host ollama binds `127.0.0.1`, so pi's ollama models need `NETWORK=host`.
   `--offline` is the old name for the default bridge plus firewall.
 - The project mounts at its real host path, so Claude `--resume` and the project key pi
   uses match between the host and the container.
@@ -196,7 +197,7 @@ LOCAL_BIN=true            # ~/.local/bin
 TMUX=true                 # ~/.tmux.conf
 NETWORK=host              # host networking; default is bridge + firewall
 HOST_SERVICES=ollama      # open the host gateway on port 11434
-HOST_SERVICES=host:port   # or one address through the host, on that port
+HOST_SERVICES=name:443    # or one address the host routes to, on that port
 MOUNTS=(                  # extra host paths: "src:dest" per line
   # "/host/path:/container/path"
 )
