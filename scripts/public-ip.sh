@@ -114,8 +114,10 @@ private_ipv4() {
   private_cidr "${1:-}/32"
 }
 
-# Cases run with `public_ipv4 --self-check`, so a change here has to face them.
-if [[ ${1:-} == --self-check ]]; then
+# Cases run with `public_ipv4 --self-check`, so a change here has to face them. Only when this file
+# is the program: sourced by the firewall, its own arguments would otherwise be read as this flag
+# and the run would leave the container open.
+if [[ ${BASH_SOURCE[0]} == "$0" && ${1:-} == --self-check ]]; then
   failed=0
   check() {
     local want=$1 ip=$2
@@ -147,6 +149,17 @@ if [[ ${1:-} == --self-check ]]; then
       printf '  ok    %-22s private %s\n' "$ip" "$want"
     else
       printf '  FAIL  %-22s wanted private %s, got %s\n' "$ip" "$want" "$got" >&2
+      failed=1
+    fi
+  }
+  check_valid() {
+    local want=$1 cidr=$2
+    local got=no
+    valid_cidr "$cidr" && got=yes
+    if [[ $got == "$want" ]]; then
+      printf '  ok    %-22s valid %s\n' "${cidr:-<empty>}" "$want"
+    else
+      printf '  FAIL  %-22s wanted valid %s, got %s\n' "${cidr:-<empty>}" "$want" "$got" >&2
       failed=1
     fi
   }
@@ -186,6 +199,14 @@ if [[ ${1:-} == --self-check ]]; then
   for ip in 127.0.0.1 169.254.169.254 1.1.1.1 8.8.8.8 172.15.255.255 172.32.0.1 192.167.1.1 \
     192.169.1.1 0.0.0.0 100.63.255.255 100.128.0.1 999.1.1.1 1.2.3 2a06:98c1:58::f3; do
     check_private no "$ip"
+  done
+
+  echo "a range the parser accepts is valid, and one it does not is refused:"
+  for cidr in 10.0.0.0/8 0.0.0.0/0 1.2.3.4/32; do
+    check_valid yes "$cidr"
+  done
+  for cidr in 10.0.0.0 10.0.0.1/8/32 10.0.0.0/33 1.2.3.0/abc 2a06:98c1:58::f3/48; do
+    check_valid no "$cidr"
   done
 
   [[ $failed == 0 ]] && echo "public-ip: ok"

@@ -39,7 +39,7 @@ for svc in "$@"; do
        fi
        ;;
   *:*) svc_port=${svc##*:}
-       if ! [[ ${svc%:*} =~ ^[A-Za-z0-9._-]+$ && $svc_port =~ ^[0-9]{1,5}$ ]] ||
+       if ! [[ ${svc%:*} =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ && $svc_port =~ ^[0-9]{1,5}$ ]] ||
          ((10#$svc_port < 1 || 10#$svc_port > 65535)); then
          echo "error: host service '$svc' is not a <host>:<port> entry" >&2
          exit 1

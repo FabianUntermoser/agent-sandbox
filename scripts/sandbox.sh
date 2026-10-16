@@ -764,15 +764,17 @@ bridge | offline | "")
 	run+=(--network="$NETNAME")
 	# A sibling container sits on one of this host's other docker networks, and the sandbox cannot
 	# enumerate them from inside. The launcher can, so every subnet goes to the firewall as a network
-	# a grant may not reach.
+	# a grant may not reach. Docker that cannot answer is a stop, not a quieter guard.
+	networks=$(docker network ls -q 2>/dev/null) || die "cannot list the docker networks"
+	subnets=$(docker network inspect --format '{{range .IPAM.Config}}{{.Subnet}} {{end}}' $networks 2>/dev/null) ||
+		die "cannot read the docker network subnets"
 	closed=()
 	while read -r subnet; do
 		[ -n "$subnet" ] || continue
 		closed+=("closed=$subnet")
-	done < <(docker network inspect --format '{{range .IPAM.Config}}{{.Subnet}} {{end}}' $(docker network ls -q) 2>/dev/null |
-		tr ' ' '\n' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+/[0-9]+$' | sort -u)
+	done < <(printf '%s\n' "$subnets" | tr ' ' '\n' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+/[0-9]+$' | sort -u)
 	if [ ${#closed[@]} -eq 0 ]; then
-		echo -e "  \e[33mcould not list this host's docker networks, so a grant could reach a sibling container.\e[0m" >&2
+		echo -e "  \e[33mno docker network has a subnet, so a grant could reach a sibling container.\e[0m" >&2
 	fi
 	if [ -n "$HOST_SERVICES" ]; then
 		run+=(--add-host=host.docker.internal:host-gateway)
