@@ -72,6 +72,11 @@ public_ipv4() {
   public_cidr "${1:-}/32"
 }
 
+# A CIDR the parser accepts. A malformed range must stop the caller rather than fail open.
+valid_cidr() {
+  _cidr_bounds "${1:-}"
+}
+
 # <address> inside <cidr>, the containment test the predicates are built on.
 in_cidr() {
   local cidr=${1:-} net=${2:-} first last nfirst nlast

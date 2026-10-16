@@ -762,6 +762,18 @@ bridge | offline | "")
 	NETNAME=agent-sandbox-net
 	docker network inspect "$NETNAME" >/dev/null 2>&1 || docker network create "$NETNAME" >/dev/null
 	run+=(--network="$NETNAME")
+	# A sibling container sits on one of this host's other docker networks, and the sandbox cannot
+	# enumerate them from inside. The launcher can, so every subnet goes to the firewall as a network
+	# a grant may not reach.
+	closed=()
+	while read -r subnet; do
+		[ -n "$subnet" ] || continue
+		closed+=("closed=$subnet")
+	done < <(docker network inspect --format '{{range .IPAM.Config}}{{.Subnet}} {{end}}' $(docker network ls -q) 2>/dev/null |
+		tr ' ' '\n' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+/[0-9]+$' | sort -u)
+	if [ ${#closed[@]} -eq 0 ]; then
+		echo -e "  \e[33mcould not list this host's docker networks, so a grant could reach a sibling container.\e[0m" >&2
+	fi
 	if [ -n "$HOST_SERVICES" ]; then
 		run+=(--add-host=host.docker.internal:host-gateway)
 		case " $HOST_SERVICES " in
@@ -774,7 +786,7 @@ bridge | offline | "")
 		--cap-add=NET_ADMIN --cap-add=NET_RAW \
 		--entrypoint /bin/bash \
 		"$IMAGE" \
-		-c "sudo /usr/local/bin/init-firewall.sh $HOST_SERVICES && exec \"\$@\"" bash "$@"
+		-c "sudo /usr/local/bin/init-firewall.sh $HOST_SERVICES ${closed[*]} && exec \"\$@\"" bash "$@"
 	;;
 *)
 	die "unknown NETWORK '$NETWORK' (bridge or host)"
