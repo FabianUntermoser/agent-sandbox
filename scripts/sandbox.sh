@@ -778,13 +778,18 @@ bridge | offline | "")
 	fi
 	# The whole grant, the services and the networks they may not reach, is handed over as a file and
 	# not as an argument: the container's user has sudo for the firewall script, so anything in the
-	# argv would be its own, and a re-run without the argument would widen the grant.
-	services="${XDG_RUNTIME_DIR:-/tmp}/agent-sandbox-$NAME.services"
+	# argv would be its own, and a re-run without the argument would widen the grant. Root inside the
+	# container reads that file, so it goes where no other local user can reach or replace it.
+	services_dir="${XDG_RUNTIME_DIR:-$HOME/.cache}/agent-sandbox"
+	mkdir -p -m 700 "$services_dir" 2>/dev/null && chmod 700 "$services_dir" ||
+		die "cannot create the grant directory $services_dir"
+	services=$(mktemp "$services_dir/$NAME.XXXXXX") ||
+		die "cannot create the grant file in $services_dir"
 	{
 		printf '%s\n' "${closed[@]}"
 		printf '%s\n' $HOST_SERVICES | grep -E ':' || true
 	} >"$services"
-	fixed_services=$(printf '%s\n' $HOST_SERVICES | grep -v ':' | tr '\n' ' ')
+	fixed_services=$(printf '%s\n' $HOST_SERVICES | grep -v ':' | tr '\n' ' ' || true)
 	run+=(-v "$services:/etc/agent-sandbox-host-services:ro")
 	if [ -n "$HOST_SERVICES" ]; then
 		run+=(--add-host=host.docker.internal:host-gateway)
