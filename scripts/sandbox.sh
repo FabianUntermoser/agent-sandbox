@@ -352,6 +352,15 @@ validate_mounts() {
 # entry from mounting the same destination twice.
 mount_dir "$WORK" "$WORK"
 
+# The manifest is sourced by this launcher on the host, so what it grants is trusted input. Inside
+# the container it is read-only: the project tree is writable, and a sandbox that could write its own
+# manifest would pick its own grants on the next run, a MOUNTS line included.
+case "$manifest_path" in
+"$WORK"/*)
+	[ -f "$manifest_path" ] && add_mask_file "$manifest_path" "the manifest"
+	;;
+esac
+
 # -- Agent mounts (controlled by manifest) -----------------------------------
 
 has_agent() {

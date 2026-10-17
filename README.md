@@ -195,6 +195,11 @@ to off, and a project with no manifest gets only its own tree. `--manifest <path
 sources a file outside the project instead, so one run can use a generated
 manifest while the project stays where it is.
 
+The manifest is read on the host and mounted read-only inside the container, so a sandbox cannot
+rewrite its own grants for a later run, a `MOUNTS` line included. A project that carries no
+manifest has nothing to fence, so a run there can leave one behind: a project an untrusted agent
+works in wants a manifest of its own.
+
 ```bash
 # .sandbox.conf, sourced by sandbox.sh (bash syntax)
 

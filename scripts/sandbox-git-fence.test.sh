@@ -86,6 +86,22 @@ launch() { # <dir> [mount entry ...] -> run the launcher with the stub docker
 
 launched() { [ -f "$T/docker.argv" ]; }
 
+launch_own() { # <dir> -> run the launcher on the project's own manifest, with the stub docker
+	local dir=$1
+	rm -f "$T/docker.argv" "$T/docker.calls"
+	set +e
+	(cd "$dir" && BASE_CONF="$T/base.conf" PATH="$T/bin:$PATH" "$SRC/sandbox.sh" --stdio --new true) >"$T/out" 2>&1
+	echo "$?"
+}
+
+printf '  the project manifest is fenced read-only\n'
+repo="$(fixture own-manifest)"
+printf 'MOUNTS=( "%s/.sandbox.conf:%s/.sandbox.conf" )\n' "$repo" "$repo" >"$repo/.sandbox.conf"
+rc="$(launch_own "$repo")"
+chk "the launch proceeds" "$rc" "0"
+chk "the manifest is mounted read-only" "$(mounts | grep -c "^$repo/.sandbox.conf=ro$")" "1"
+chk "and no writable entry is left for it" "$(mounts | grep -c "^$repo/.sandbox.conf=rw$" || true)" "0"
+
 printf '  a missing hooks directory is created and fenced\n'
 repo="$(fixture missing-hooks)"
 rm -rf "$repo/.git/hooks"
