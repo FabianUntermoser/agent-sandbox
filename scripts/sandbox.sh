@@ -776,6 +776,16 @@ bridge | offline | "")
 	if [ ${#closed[@]} -eq 0 ]; then
 		echo -e "  \e[33mno docker network has a subnet, so a grant could reach a sibling container.\e[0m" >&2
 	fi
+	# The whole grant, the services and the networks they may not reach, is handed over as a file and
+	# not as an argument: the container's user has sudo for the firewall script, so anything in the
+	# argv would be its own, and a re-run without the argument would widen the grant.
+	services="${XDG_RUNTIME_DIR:-/tmp}/agent-sandbox-$NAME.services"
+	{
+		printf '%s\n' "${closed[@]}"
+		printf '%s\n' $HOST_SERVICES | grep -E ':' || true
+	} >"$services"
+	fixed_services=$(printf '%s\n' $HOST_SERVICES | grep -v ':' | tr '\n' ' ')
+	run+=(-v "$services:/etc/agent-sandbox-host-services:ro")
 	if [ -n "$HOST_SERVICES" ]; then
 		run+=(--add-host=host.docker.internal:host-gateway)
 		case " $HOST_SERVICES " in
@@ -788,7 +798,7 @@ bridge | offline | "")
 		--cap-add=NET_ADMIN --cap-add=NET_RAW \
 		--entrypoint /bin/bash \
 		"$IMAGE" \
-		-c "sudo /usr/local/bin/init-firewall.sh $HOST_SERVICES ${closed[*]} && exec \"\$@\"" bash "$@"
+		-c "sudo /usr/local/bin/init-firewall.sh $fixed_services && exec \"\$@\"" bash "$@"
 	;;
 *)
 	die "unknown NETWORK '$NETWORK' (bridge or host)"

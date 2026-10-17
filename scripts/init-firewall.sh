@@ -2,8 +2,9 @@
 
 # USAGE: default-deny egress firewall for agent sandbox container
 #
-# Optional args name host services to open: ollama, or <host>:<port>. A closed=<cidr> arg names a
-# network the grant may not reach, which the launcher hands over.
+# Optional arg carries a fixed token only: ollama. Host:port grants and the closed=<cidr> networks
+# arrive in $SERVICES, a read-only file the launcher wrote, because the user inside the container
+# has sudo for this script and anything in the argv would be its own.
 #
 # Two correctness invariants are baked in here, do not "simplify" them away:
 #  (1) Policies are reset to ACCEPT right after the flush so a re-run can still
@@ -29,23 +30,38 @@ source /usr/local/lib/public-ip.sh
 # Checked before the firewall is touched: the policies below sit at ACCEPT until the allowlist
 # exists, so an entry that is refused there would leave the container open. A run with one stops
 # here instead, with the ruleset it already had.
+#
+# The argv carries fixed tokens only. The user inside the container has sudo for this script, so a
+# dynamic grant in an argument would let it widen its own egress; a host:port entry arrives in a
+# read-only file instead.
+SERVICES=${SERVICES:-/etc/agent-sandbox-host-services}
+grants=()
+closed_nets=()
+if [[ -f $SERVICES ]]; then
+  while read -r entry; do
+    case "$entry" in '' | \#*) continue ;; esac
+    if [[ $entry == closed=* ]]; then
+      if ! valid_cidr "${entry#closed=}"; then
+        echo "error: closed network '$entry' in $SERVICES is not a CIDR" >&2
+        exit 1
+      fi
+      closed_nets+=("${entry#closed=}")
+      continue
+    fi
+    svc_port=${entry##*:}
+    if ! [[ ${entry%:*} =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ && $svc_port =~ ^[0-9]{1,5}$ ]] ||
+      ((10#$svc_port < 1 || 10#$svc_port > 65535)); then
+      echo "error: host service '$entry' in $SERVICES is not a <host>:<port> entry" >&2
+      exit 1
+    fi
+    grants+=("$entry")
+  done <"$SERVICES"
+fi
+
 for svc in "$@"; do
   case "$svc" in
   ollama) ;;
-  closed=*)
-       if ! valid_cidr "${svc#closed=}"; then
-         echo "error: closed network '$svc' is not a CIDR" >&2
-         exit 1
-       fi
-       ;;
-  *:*) svc_port=${svc##*:}
-       if ! [[ ${svc%:*} =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ && $svc_port =~ ^[0-9]{1,5}$ ]] ||
-         ((10#$svc_port < 1 || 10#$svc_port > 65535)); then
-         echo "error: host service '$svc' is not a <host>:<port> entry" >&2
-         exit 1
-       fi
-       ;;
-  *) echo "error: unknown host service '$svc'" >&2
+  *) echo "error: unknown argument '$svc', the grant comes from $SERVICES" >&2
      exit 1 ;;
   esac
 done
@@ -120,18 +136,14 @@ iptables -A OUTPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
 # Host services are opt-in: a granted name opens its port on this container's own gateway, a
 # granted <host>:<port> entry opens the addresses the name answers with, on that port alone. An
 # answer inside a network this container may not reach is refused: its own links, and every docker
-# network of the host, which the launcher passes as closed=<cidr> because this container cannot
+# network of the host, which the launcher lists in the services file because this container cannot
 # enumerate them. A grant then names a service off the network, never a sibling container.
 on_closed_net() {
-  local arg net
-  for arg in "$@"; do
-    case "$arg" in
-    closed=*)
-      if in_cidr "$1" "${arg#closed=}"; then
-        return 0
-      fi
-      ;;
-    esac
+  local net
+  for net in "${closed_nets[@]}"; do
+    if in_cidr "$1" "$net"; then
+      return 0
+    fi
   done
   while read -r net; do
     [[ -n "$net" ]] || continue
@@ -151,33 +163,32 @@ for svc in "$@"; do
       iptables -A OUTPUT -d "$GW" -p tcp --dport 11434 -j ACCEPT
     fi
     ;;
-  closed=*)
-    ;;
-  *:*)
-    # The answer moves, so the name is resolved here rather than in the allowlist. Only a public or
-    # private destination is opened, so a poisoned answer cannot aim the grant at loopback or at the
-    # link-local metadata service.
-    svc_host=${svc%:*}
-    svc_port=$((10#${svc##*:}))
-    opened=0
-    while read -r ip; do
-      [[ -n "$ip" ]] || continue
-      if on_closed_net "$ip" "$@"; then
-        svc_refused=$((svc_refused + 1))
-        continue
-      fi
-      if ! public_ipv4 "$ip" && ! private_ipv4 "$ip"; then
-        svc_refused=$((svc_refused + 1))
-        continue
-      fi
-      iptables -A OUTPUT -d "$ip" -p tcp --dport "$svc_port" -j ACCEPT
-      opened=$((opened + 1))
-    done < <(dig +short A "$svc_host" 2>/dev/null | grep -E '^[0-9.]+$' || true)
-    if ((opened == 0)); then
-      echo "  WARN: host service '$svc' resolved to no address that may be opened" >&2
-    fi
-    ;;
   esac
+done
+
+for svc in "${grants[@]}"; do
+  # The answer moves, so the name is resolved here rather than in the allowlist. Only a public or
+  # private destination is opened, so a poisoned answer cannot aim the grant at loopback or at the
+  # link-local metadata service.
+  svc_host=${svc%:*}
+  svc_port=$((10#${svc##*:}))
+  opened=0
+  while read -r ip; do
+    [[ -n "$ip" ]] || continue
+    if on_closed_net "$ip"; then
+      svc_refused=$((svc_refused + 1))
+      continue
+    fi
+    if ! public_ipv4 "$ip" && ! private_ipv4 "$ip"; then
+      svc_refused=$((svc_refused + 1))
+      continue
+    fi
+    iptables -A OUTPUT -d "$ip" -p tcp --dport "$svc_port" -j ACCEPT
+    opened=$((opened + 1))
+  done < <(dig +short A "$svc_host" 2>/dev/null | grep -E '^[0-9.]+$' || true)
+  if ((opened == 0)); then
+    echo "  WARN: host service '$svc' resolved to no address that may be opened" >&2
+  fi
 done
 if ((svc_refused > 0)); then
   echo "  WARN: refused $svc_refused host service address(es) on a network this container may not reach, or outside public and private space" >&2
