@@ -27,9 +27,21 @@ Sandbox container for AI agents (Claude, Codex, pi).
   with default-deny egress allowlisted in `scripts/init-firewall.sh` (Anthropic, GitHub,
   GitLab, npm, PyPI, ollama, and more). A sibling container is not reachable.
   `--network=host` or `NETWORK=host` opts out.
-- `HOST_SERVICES=ollama` opens the host gateway on port 11434, and nothing else on the
-  host or the sandbox network. The host ollama binds `127.0.0.1`, so pi's ollama models
-  need `NETWORK=host`. `--offline` is the old name for the default bridge plus firewall.
+  That claim is about siblings on bridge networks: one that runs with host networking has no
+  IPAM subnet, so the closed-network refusal of a `<host>:<port>` grant does not cover it.
+- `HOST_SERVICES=ollama` opens the host gateway on port 11434, and `HOST_SERVICES=<host>:<port>`
+  opens the addresses that name answers with, on that port alone. The name is resolved when the
+  sandbox starts, an answer inside the container's own network or inside any other docker network
+  of the host is refused, and the rest is opened only when it is a public or a private
+  destination, so the grant cannot be aimed at loopback, at a sibling container or at the metadata
+  service. A private address outside those networks, the host's own tailnet or LAN address among
+  them, opens like any other, which is what the grant is for. The launcher writes the grant and
+  the networks it may not reach into a read-only file the container mounts, never into the
+  arguments: the sandbox user has sudo for the firewall script, so an argument would let the agent
+  widen its own egress. Nothing else on the host or the sandbox network is reachable. A service on
+  a tailnet or a LAN needs the second form and no host networking. The host ollama binds
+  `127.0.0.1`, so pi's ollama models need `NETWORK=host`. `--offline` is the old name for the
+  default bridge plus firewall.
 - The project mounts at its real host path, so Claude `--resume` and the project key pi
   uses match between the host and the container.
 
@@ -183,6 +195,11 @@ to off, and a project with no manifest gets only its own tree. `--manifest <path
 sources a file outside the project instead, so one run can use a generated
 manifest while the project stays where it is.
 
+The manifest is read on the host and mounted read-only inside the container, so a sandbox cannot
+rewrite its own grants for a later run, a `MOUNTS` line included. A project that carries no
+manifest has nothing to fence, so a run there can leave one behind: a project an untrusted agent
+works in wants a manifest of its own.
+
 ```bash
 # .sandbox.conf, sourced by sandbox.sh (bash syntax)
 
@@ -192,6 +209,7 @@ LOCAL_BIN=true            # ~/.local/bin
 TMUX=true                 # ~/.tmux.conf
 NETWORK=host              # host networking; default is bridge + firewall
 HOST_SERVICES=ollama      # open the host gateway on port 11434
+HOST_SERVICES=name:443    # or one name the host routes to, on that port
 MOUNTS=(                  # extra host paths: "src:dest" per line
   # "/host/path:/container/path"
 )

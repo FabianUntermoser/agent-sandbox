@@ -79,5 +79,14 @@ expect yes "$(flag "$reached")" "the project's own manifest is used"
 expect yes "$sourced" "and it was sourced"
 rm -f "$work/.sandbox.conf"
 
+printf '  a host:port grant with no docker subnet listed\n'
+printf 'MOUNTS=()\nHOST_SERVICES="proxy.example:8317"\n' >"$external"
+if run --manifest "$external"; then
+	expect stopped ran "a grant whose closed networks are unknown stops the run"
+else
+	expect yes "$(grep -q 'no docker network has a subnet' "$work/out" && echo yes || echo no)" "it stopped with the subnet message"
+	expect no "$(flag "$reached")" "and before docker"
+fi
+
 [[ $failed == 0 ]] && echo "sandbox-manifest: ok"
 exit $failed

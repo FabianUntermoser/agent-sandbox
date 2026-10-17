@@ -11,6 +11,8 @@ set -euo pipefail
 SRC="$(cd "$(dirname "$0")" && pwd)"
 T="$(mktemp -d)"
 trap 'rm -rf "$T"' EXIT
+# The launcher writes its grant file under here, so a case can aim a project symlink at it.
+export XDG_RUNTIME_DIR="$T/run"
 
 pass=0
 fail=0
@@ -83,6 +85,22 @@ launch() { # <dir> [mount entry ...] -> run the launcher with the stub docker
 }
 
 launched() { [ -f "$T/docker.argv" ]; }
+
+launch_own() { # <dir> -> run the launcher on the project's own manifest, with the stub docker
+	local dir=$1
+	rm -f "$T/docker.argv" "$T/docker.calls"
+	set +e
+	(cd "$dir" && BASE_CONF="$T/base.conf" PATH="$T/bin:$PATH" "$SRC/sandbox.sh" --stdio --new true) >"$T/out" 2>&1
+	echo "$?"
+}
+
+printf '  the project manifest is fenced read-only\n'
+repo="$(fixture own-manifest)"
+printf 'MOUNTS=( "%s/.sandbox.conf:%s/.sandbox.conf" )\n' "$repo" "$repo" >"$repo/.sandbox.conf"
+rc="$(launch_own "$repo")"
+chk "the launch proceeds" "$rc" "0"
+chk "the manifest is mounted read-only" "$(mounts | grep -c "^$repo/.sandbox.conf=ro$")" "1"
+chk "and no writable entry is left for it" "$(mounts | grep -c "^$repo/.sandbox.conf=rw$" || true)" "0"
 
 printf '  a missing hooks directory is created and fenced\n'
 repo="$(fixture missing-hooks)"
@@ -267,6 +285,33 @@ rc="$(launch "$repo")"
 chk "the launch proceeds when a project symlink exposes it" "$rc" "0"
 chk "the symlink destination is mounted read-only" "$(mounts | grep -c "^$repo/hooks-link=ro$")" "1"
 chk "and no writable entry is left for it" "$(mounts | grep -c "^$repo/hooks-link=rw$" || true)" "0"
+
+printf '  a project symlink into the grant directory is refused\n'
+repo="$(fixture grant-link)"
+mkdir -p -m 700 "$T/run/agent-sandbox"
+: >"$T/run/agent-sandbox/other-run.grant"
+ln -s "$T/run/agent-sandbox" "$repo/grant-link"
+ln -s "$T/run/agent-sandbox/other-run.grant" "$repo/grant-file-link"
+rc="$(launch "$repo")"
+chk "the launch proceeds" "$rc" "0"
+chk "nothing is mounted for a link to the directory" "$(mounts | grep -c "^$repo/grant-link=" || true)" "0"
+chk "nothing is mounted for a link to a file in it" "$(mounts | grep -c "^$repo/grant-file-link=" || true)" "0"
+chk "the run reports the refusal" "$(sed -n '/refused (/,$p' "$T/out" | grep -c "^    grant-link -> $T/run/agent-sandbox$" || true)" "1"
+
+printf '  a project symlink into the directory holding the grant directory\n'
+repo="$(fixture grant-parent-link)"
+ln -s "$T/run" "$repo/grant-parent-link"
+rc="$(launch "$repo")"
+chk "the launch proceeds" "$rc" "0"
+chk "nothing is mounted for it" "$(mounts | grep -c "^$repo/grant-parent-link=" || true)" "0"
+
+printf '  a project symlink into the other base the grant directory can sit under\n'
+[ -d "$HOME/.cache" ] || mkdir -p "$HOME/.cache"
+repo="$(fixture grant-cache-link)"
+ln -s "$HOME/.cache" "$repo/grant-cache-link"
+rc="$(launch "$repo")"
+chk "the launch proceeds" "$rc" "0"
+chk "nothing is mounted for it" "$(mounts | grep -c "^$repo/grant-cache-link=" || true)" "0"
 
 printf '  the linked-worktree shape keeps its shared git directory read-only\n'
 main="$(fixture worktree-main)"
