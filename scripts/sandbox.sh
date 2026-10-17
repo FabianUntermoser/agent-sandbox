@@ -397,6 +397,20 @@ if [ -n "$VAULT" ]; then
 	deny_self+=("$VAULT")
 	vault_roots+=("$VAULT")
 fi
+# The grant directory holds the files the firewall of another run trusts, so it is never handed
+# over, and neither is the directory that holds it: a mount of the parent exposes the grant files
+# under it just as well. The directory can sit under either base, whichever the launcher picked, so
+# both are refused, spelling and resolved path, whether or not the path exists yet.
+services_base="${XDG_RUNTIME_DIR:-$HOME/.cache}"
+services_dir="$services_base/agent-sandbox"
+for base in "${XDG_RUNTIME_DIR:-}" "$HOME/.cache"; do
+	[ -n "$base" ] || continue
+	for d in "$base" "$base/agent-sandbox"; do
+		deny_tree+=("$d")
+		r=$(readlink -f "$d" 2>/dev/null || true)
+		[ -n "$r" ] && deny_tree+=("$r")
+	done
+done
 
 denied() {
 	local p r v
@@ -774,13 +788,16 @@ bridge | offline | "")
 		closed+=("closed=$subnet")
 	done < <(printf '%s\n' "$subnets" | tr ' ' '\n' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+/[0-9]+$' | sort -u)
 	if [ ${#closed[@]} -eq 0 ]; then
+		# The guard a <host>:<port> grant rests on cannot be drawn without them.
+		if printf '%s\n' $HOST_SERVICES | grep -q ':'; then
+			die "no docker network has a subnet, so a <host>:<port> grant could reach a sibling container"
+		fi
 		echo -e "  \e[33mno docker network has a subnet, so a grant could reach a sibling container.\e[0m" >&2
 	fi
 	# The whole grant, the services and the networks they may not reach, is handed over as a file and
 	# not as an argument: the container's user has sudo for the firewall script, so anything in the
 	# argv would be its own, and a re-run without the argument would widen the grant. Root inside the
 	# container reads that file, so it goes where no other local user can reach or replace it.
-	services_dir="${XDG_RUNTIME_DIR:-$HOME/.cache}/agent-sandbox"
 	mkdir -p -m 700 "$services_dir" 2>/dev/null && chmod 700 "$services_dir" ||
 		die "cannot create the grant directory $services_dir"
 	services=$(mktemp "$services_dir/$NAME.XXXXXX") ||

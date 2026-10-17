@@ -27,6 +27,8 @@ Sandbox container for AI agents (Claude, Codex, pi).
   with default-deny egress allowlisted in `scripts/init-firewall.sh` (Anthropic, GitHub,
   GitLab, npm, PyPI, ollama, and more). A sibling container is not reachable.
   `--network=host` or `NETWORK=host` opts out.
+  That claim is about siblings on bridge networks: one that runs with host networking has no
+  IPAM subnet, so the closed-network refusal of a `<host>:<port>` grant does not cover it.
 - `HOST_SERVICES=ollama` opens the host gateway on port 11434, and `HOST_SERVICES=<host>:<port>`
   opens the addresses that name answers with, on that port alone. The name is resolved when the
   sandbox starts, an answer inside the container's own network or inside any other docker network
