@@ -10,7 +10,10 @@ set -euo pipefail
 
 SRC="$(cd "$(dirname "$0")" && pwd)"
 T="$(mktemp -d)"
-trap 'rm -rf "$T"' EXIT
+# The generated manifest lives outside T, so a case can mount T writable without handing over the
+# tree the host sources.
+M="$(mktemp -d)"
+trap 'rm -rf "$T" "$M"' EXIT
 # The launcher writes its grant file under here, so a case can aim a project symlink at it.
 export XDG_RUNTIME_DIR="$T/run"
 
@@ -77,10 +80,10 @@ launch() { # <dir> [mount entry ...] -> run the launcher with the stub docker
 		printf 'MOUNTS=('
 		printf ' %q' "$@"
 		printf ')\n'
-	} >"$T/manifest.local"
+	} >"$M/manifest.local"
 	rm -f "$T/docker.argv" "$T/docker.calls"
 	set +e
-	(cd "$dir" && BASE_CONF="$T/base.conf" PATH="$T/bin:$PATH" "$SRC/sandbox.sh" --stdio --new --manifest "$T/manifest.local" true) >"$T/out" 2>&1
+	(cd "$dir" && BASE_CONF="$T/base.conf" PATH="$T/bin:$PATH" "$SRC/sandbox.sh" --stdio --new --manifest "$M/manifest.local" true) >"$T/out" 2>&1
 	echo "$?"
 }
 
@@ -101,6 +104,11 @@ rc="$(launch_own "$repo")"
 chk "the launch proceeds" "$rc" "0"
 chk "the manifest is mounted read-only" "$(mounts | grep -c "^$repo/.sandbox.conf=ro$")" "1"
 chk "and no writable entry is left for it" "$(mounts | grep -c "^$repo/.sandbox.conf=rw$" || true)" "0"
+
+printf '  a writable mount of the tree holding an external manifest refuses the launch\n'
+rc="$(launch "$repo" "$M:$M")"
+chk "the launch is refused" "$([ "$rc" != 0 ] && echo refused || echo proceeded)" "refused"
+chk "and docker is never reached" "$(launched && echo yes || echo no)" "no"
 
 printf '  a missing hooks directory is created and fenced\n'
 repo="$(fixture missing-hooks)"
@@ -132,13 +140,13 @@ launch_unwritable() { # <dir>
 		printf '  skipped: root without setpriv, the unwritable case cannot be made real\n' >&2
 		exit 1
 	}
-	chmod 755 "$T" "$dir"
+	chmod 755 "$T" "$M" "$dir"
 	chmod 500 "$dir/.git"
 	rm -f "$T/docker.argv" "$T/docker.calls"
 	set +e
 	(cd "$dir" && BASE_CONF="$T/base.conf" PATH="$T/bin:$PATH" \
 		setpriv --reuid 65534 --regid 65534 --clear-groups \
-		"$SRC/sandbox.sh" --stdio --new --manifest "$T/manifest.local" true) >"$T/out" 2>&1
+		"$SRC/sandbox.sh" --stdio --new --manifest "$M/manifest.local" true) >"$T/out" 2>&1
 	echo "$?"
 	chmod 700 "$dir/.git"
 }

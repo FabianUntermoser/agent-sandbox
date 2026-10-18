@@ -329,11 +329,18 @@ fence_mount_destination() { # <destination> <source>
 
 # The fence is worth what the final mount set says. A writable entry at or under a fenced name puts
 # that name back in reach, and the entry can come from a manifest MOUNTS line or a project symlink,
-# so the whole set is checked once it is complete.
+# so the whole set is checked once it is complete. A manifest outside the project cannot be fenced
+# at all, so a writable mount of the tree that holds it is refused: the host sources that file as
+# bash, and a sandbox that could write it would run code there on the next launch.
 validate_mounts() {
-	local i spec dst mode p
+	local i spec src dst mode p outside=
+	case "$manifest_path" in
+	"$WORK"/*) ;;
+	*) [ -f "$manifest_path" ] && outside=$(readlink -f "$manifest_path" 2>/dev/null || printf '%s' "$manifest_path") ;;
+	esac
 	for ((i = 0; i < ${#mounts[@]}; i += 2)); do
 		spec=${mounts[i + 1]}
+		src=${spec%%:*}
 		dst=${spec#*:}
 		dst=${dst%%:*}
 		mode=${spec##*:}
@@ -343,6 +350,12 @@ validate_mounts() {
 			"$p" | "$p"/*) die "refusing a writable mount at $dst: $p is fenced read-only" ;;
 			esac
 		done
+		if [ -n "$outside" ]; then
+			src=$(readlink -f "$src" 2>/dev/null || printf '%s' "$src")
+			case "$outside" in
+			"$src" | "$src"/*) die "refusing a writable mount at $dst: it holds the manifest $manifest_path, which the host sources" ;;
+			esac
+		fi
 	done
 	return 0
 }

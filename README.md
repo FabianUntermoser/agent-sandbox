@@ -196,9 +196,10 @@ sources a file outside the project instead, so one run can use a generated
 manifest while the project stays where it is.
 
 The manifest is read on the host and mounted read-only inside the container, so a sandbox cannot
-rewrite its own grants for a later run, a `MOUNTS` line included. A project that carries no
-manifest has nothing to fence, so a run there can leave one behind: a project an untrusted agent
-works in wants a manifest of its own.
+rewrite its own grants for a later run, a `MOUNTS` line included. One passed with `--manifest` from
+outside the project is not mounted at all, so a run that exposes the tree holding it writable is
+refused instead. A project that carries no manifest has nothing to fence, so a run there can leave
+one behind: a project an untrusted agent works in wants a manifest of its own.
 
 ```bash
 # .sandbox.conf, sourced by sandbox.sh (bash syntax)
