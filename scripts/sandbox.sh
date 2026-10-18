@@ -327,11 +327,8 @@ fence_mount_destination() { # <destination> <source>
 	protected+=("$1")
 }
 
-# The fence is worth what the final mount set says. A writable entry at or under a fenced name puts
-# that name back in reach, and the entry can come from a manifest MOUNTS line or a project symlink,
-# so the whole set is checked once it is complete. A manifest outside the project cannot be fenced
-# at all, so a writable mount of the tree that holds it is refused: the host sources that file as
-# bash, and a sandbox that could write it would run code there on the next launch.
+# Judged on the finished mount set: a writable entry at or under a fenced name puts it back in reach,
+# and a writable mount of the tree that holds an external manifest hands the host a file it sources.
 validate_mounts() {
 	local i spec src dst mode p outside=
 	case "$manifest_path" in
@@ -365,9 +362,8 @@ validate_mounts() {
 # entry from mounting the same destination twice.
 mount_dir "$WORK" "$WORK"
 
-# The manifest is sourced by this launcher on the host, so what it grants is trusted input. Inside
-# the container it is read-only: the project tree is writable, and a sandbox that could write its own
-# manifest would pick its own grants on the next run, a MOUNTS line included.
+# The manifest is read on the host and mounted back read-only: the project tree is writable, so
+# otherwise a sandbox would pick its own grants for the next run.
 case "$manifest_path" in
 "$WORK"/*)
 	[ -f "$manifest_path" ] && add_mask_file "$manifest_path" "the manifest"
@@ -419,10 +415,8 @@ if [ -n "$VAULT" ]; then
 	deny_self+=("$VAULT")
 	vault_roots+=("$VAULT")
 fi
-# The grant directory holds the files the firewall of another run trusts, so it is never handed
-# over, and neither is the directory that holds it: a mount of the parent exposes the grant files
-# under it just as well. The directory can sit under either base, whichever the launcher picked, so
-# both are refused, spelling and resolved path, whether or not the path exists yet.
+# The grant directory holds what another run's firewall trusts, so neither it nor the directory
+# above it is ever handed over, under either base the launcher can pick.
 services_base="${XDG_RUNTIME_DIR:-$HOME/.cache}"
 services_dir="$services_base/agent-sandbox"
 for base in "${XDG_RUNTIME_DIR:-}" "$HOME/.cache"; do
@@ -798,9 +792,8 @@ bridge | offline | "")
 	NETNAME=agent-sandbox-net
 	docker network inspect "$NETNAME" >/dev/null 2>&1 || docker network create "$NETNAME" >/dev/null
 	run+=(--network="$NETNAME")
-	# A sibling container sits on one of this host's other docker networks, and the sandbox cannot
-	# enumerate them from inside. The launcher can, so every subnet goes to the firewall as a network
-	# a grant may not reach. Docker that cannot answer is a stop, not a quieter guard.
+	# A container cannot enumerate the host's other docker networks, so the launcher lists their
+	# subnets and the firewall treats each as a network a grant may not reach.
 	networks=$(docker network ls -q 2>/dev/null) || die "cannot list the docker networks"
 	subnets=$(docker network inspect --format '{{range .IPAM.Config}}{{.Subnet}} {{end}}' $networks 2>/dev/null) ||
 		die "cannot read the docker network subnets"
@@ -816,10 +809,8 @@ bridge | offline | "")
 		fi
 		echo -e "  \e[33mno docker network has a subnet, so a grant could reach a sibling container.\e[0m" >&2
 	fi
-	# The whole grant, the services and the networks they may not reach, is handed over as a file and
-	# not as an argument: the container's user has sudo for the firewall script, so anything in the
-	# argv would be its own, and a re-run without the argument would widen the grant. Root inside the
-	# container reads that file, so it goes where no other local user can reach or replace it.
+	# The grant is a file, not an argument, because the container's user can run the firewall script:
+	# one file root reads, in a directory no other local user can reach.
 	mkdir -p -m 700 "$services_dir" 2>/dev/null && chmod 700 "$services_dir" ||
 		die "cannot create the grant directory $services_dir"
 	services=$(mktemp "$services_dir/$NAME.XXXXXX") ||

@@ -5,11 +5,8 @@
 #        private_ipv4 <address> - true when the address is in the private space this host routes to
 #        public_ipv4 --self-check   - run the cases below
 #
-# Sourced by the allowlist generator and by the firewall. A name that is resolved at start comes
-# from whatever the resolver answers, so an address that reaches a private, loopback, link-local,
-# carrier-grade NAT or reserved network must never enter an egress allowlist: that would let a
-# poisoned or broken DNS answer widen the boundary the allowlist exists to draw. The same holds
-# for the ranges the GitHub meta API answers with, so the non-public space is one table here.
+# Sourced by the allowlist generator and by the firewall. A resolved answer must never widen the
+# boundary the allowlist exists to draw, so the non-public space is one table here.
 
 # Non-public IPv4 space, one entry per reserved purpose.
 non_public_ipv4=(
@@ -29,9 +26,7 @@ non_public_ipv4=(
   240.0.0.0/4     # reserved
 )
 
-# Parse <network>/<prefix> into _first and _last, the first and last address of the range as
-# integers. Refuses a bare address, an absent, non-numeric or out-of-range prefix, junk after the
-# prefix, an octet above 255, and anything that is not IPv4.
+# <network>/<prefix> into _first and _last as integers, or fail.
 _cidr_bounds() {
   local cidr=${1:-} ip prefix a b c d
   local octet='25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9][0-9]|[0-9]'
@@ -50,8 +45,7 @@ _cidr_bounds() {
   _last=$((base | (size - 1)))
 }
 
-# A range is refused when it overlaps a non-public block anywhere, not merely when its network
-# address lands in one: 172.0.0.0/8 starts in public space and still covers 172.16.0.0/12.
+# Refused on any overlap with a non-public block, not only when the network address lands in one.
 public_cidr() {
   local cidr=${1:-} first last block bfirst blast
   _cidr_bounds "$cidr" || return 1
@@ -77,7 +71,6 @@ valid_cidr() {
   _cidr_bounds "${1:-}"
 }
 
-# <address> inside <cidr>, the containment test the predicates are built on.
 in_cidr() {
   local cidr=${1:-} net=${2:-} first last nfirst nlast
   [[ $cidr == */* ]] || cidr=$cidr/32
@@ -90,9 +83,7 @@ in_cidr() {
   ((first >= nfirst && last <= nlast))
 }
 
-# The private space this host routes to, where a tailnet or a LAN node lives. A host service the
-# manifest names by host:port is resolved when the sandbox starts, and an answer in here is opened
-# the way a public one is.
+# The private space this host routes to, where a tailnet or a LAN node lives.
 private_ipv4_blocks=(
   10.0.0.0/8
   100.64.0.0/10
@@ -115,8 +106,7 @@ private_ipv4() {
 }
 
 # Cases run with `public_ipv4 --self-check`, so a change here has to face them. Only when this file
-# is the program: sourced by the firewall, its own arguments would otherwise be read as this flag
-# and the run would leave the container open.
+# is the program: sourced by the firewall, its arguments would be read as this flag.
 if [[ ${BASH_SOURCE[0]} == "$0" && ${1:-} == --self-check ]]; then
   failed=0
   check() {
