@@ -35,6 +35,7 @@ help() {
 		  MOUNTS=(...)               extra host paths
 		  NETWORK=host               host networking (default: bridge + firewall)
 		  HOST_SERVICES=ollama       open the host gateway on 11434
+		  HOST_SERVICES=name:443     open that name through the host, on that port
 	EOF
 }
 
@@ -326,13 +327,17 @@ fence_mount_destination() { # <destination> <source>
 	protected+=("$1")
 }
 
-# The fence is worth what the final mount set says. A writable entry at or under a fenced name puts
-# that name back in reach, and the entry can come from a manifest MOUNTS line or a project symlink,
-# so the whole set is checked once it is complete.
+# Judged on the finished mount set: a writable entry at or under a fenced name puts it back in reach,
+# and a writable mount of the tree that holds an external manifest hands the host a file it sources.
 validate_mounts() {
-	local i spec dst mode p
+	local i spec src dst mode p outside=
+	case "$manifest_path" in
+	"$WORK"/*) ;;
+	*) [ -f "$manifest_path" ] && outside=$(readlink -f "$manifest_path" 2>/dev/null || printf '%s' "$manifest_path") ;;
+	esac
 	for ((i = 0; i < ${#mounts[@]}; i += 2)); do
 		spec=${mounts[i + 1]}
+		src=${spec%%:*}
 		dst=${spec#*:}
 		dst=${dst%%:*}
 		mode=${spec##*:}
@@ -342,6 +347,12 @@ validate_mounts() {
 			"$p" | "$p"/*) die "refusing a writable mount at $dst: $p is fenced read-only" ;;
 			esac
 		done
+		if [ -n "$outside" ]; then
+			src=$(readlink -f "$src" 2>/dev/null || printf '%s' "$src")
+			case "$outside" in
+			"$src" | "$src"/*) die "refusing a writable mount at $dst: it holds the manifest $manifest_path, which the host sources" ;;
+			esac
+		fi
 	done
 	return 0
 }
@@ -350,6 +361,14 @@ validate_mounts() {
 # helper as everything else, which resolves a symlinked workdir and keeps a later
 # entry from mounting the same destination twice.
 mount_dir "$WORK" "$WORK"
+
+# The manifest is read on the host and mounted back read-only: the project tree is writable, so
+# otherwise a sandbox would pick its own grants for the next run.
+case "$manifest_path" in
+"$WORK"/*)
+	[ -f "$manifest_path" ] && add_mask_file "$manifest_path" "the manifest"
+	;;
+esac
 
 # -- Agent mounts (controlled by manifest) -----------------------------------
 
@@ -396,6 +415,18 @@ if [ -n "$VAULT" ]; then
 	deny_self+=("$VAULT")
 	vault_roots+=("$VAULT")
 fi
+# The grant directory holds what another run's firewall trusts, so neither it nor the directory
+# above it is ever handed over, under either base the launcher can pick.
+services_base="${XDG_RUNTIME_DIR:-$HOME/.cache}"
+services_dir="$services_base/agent-sandbox"
+for base in "${XDG_RUNTIME_DIR:-}" "$HOME/.cache"; do
+	[ -n "$base" ] || continue
+	for d in "$base" "$base/agent-sandbox"; do
+		deny_tree+=("$d")
+		r=$(readlink -f "$d" 2>/dev/null || true)
+		[ -n "$r" ] && deny_tree+=("$r")
+	done
+done
 
 denied() {
 	local p r v
@@ -761,6 +792,35 @@ bridge | offline | "")
 	NETNAME=agent-sandbox-net
 	docker network inspect "$NETNAME" >/dev/null 2>&1 || docker network create "$NETNAME" >/dev/null
 	run+=(--network="$NETNAME")
+	# A container cannot enumerate the host's other docker networks, so the launcher lists their
+	# subnets and the firewall treats each as a network a grant may not reach.
+	networks=$(docker network ls -q 2>/dev/null) || die "cannot list the docker networks"
+	subnets=$(docker network inspect --format '{{range .IPAM.Config}}{{.Subnet}} {{end}}' $networks 2>/dev/null) ||
+		die "cannot read the docker network subnets"
+	closed=()
+	while read -r subnet; do
+		[ -n "$subnet" ] || continue
+		closed+=("closed=$subnet")
+	done < <(printf '%s\n' "$subnets" | tr ' ' '\n' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+/[0-9]+$' | sort -u)
+	if [ ${#closed[@]} -eq 0 ]; then
+		# The guard a <host>:<port> grant rests on cannot be drawn without them.
+		if printf '%s\n' $HOST_SERVICES | grep -q ':'; then
+			die "no docker network has a subnet, so a <host>:<port> grant could reach a sibling container"
+		fi
+		echo -e "  \e[33mno docker network has a subnet, so a grant could reach a sibling container.\e[0m" >&2
+	fi
+	# The grant is a file, not an argument, because the container's user can run the firewall script:
+	# one file root reads, in a directory no other local user can reach.
+	mkdir -p -m 700 "$services_dir" 2>/dev/null && chmod 700 "$services_dir" ||
+		die "cannot create the grant directory $services_dir"
+	services=$(mktemp "$services_dir/$NAME.XXXXXX") ||
+		die "cannot create the grant file in $services_dir"
+	{
+		printf '%s\n' "${closed[@]}"
+		printf '%s\n' $HOST_SERVICES | grep -E ':' || true
+	} >"$services"
+	fixed_services=$(printf '%s\n' $HOST_SERVICES | grep -v ':' | tr '\n' ' ' || true)
+	run+=(-v "$services:/etc/agent-sandbox-host-services:ro")
 	if [ -n "$HOST_SERVICES" ]; then
 		run+=(--add-host=host.docker.internal:host-gateway)
 		case " $HOST_SERVICES " in
@@ -773,7 +833,7 @@ bridge | offline | "")
 		--cap-add=NET_ADMIN --cap-add=NET_RAW \
 		--entrypoint /bin/bash \
 		"$IMAGE" \
-		-c "sudo /usr/local/bin/init-firewall.sh $HOST_SERVICES && exec \"\$@\"" bash "$@"
+		-c "sudo /usr/local/bin/init-firewall.sh $fixed_services && exec \"\$@\"" bash "$@"
 	;;
 *)
 	die "unknown NETWORK '$NETWORK' (bridge or host)"
