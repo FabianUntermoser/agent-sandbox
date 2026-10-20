@@ -104,7 +104,9 @@ RUN npm install -g playwright@${PLAYWRIGHT_VERSION} \
   && npx --yes playwright@${PLAYWRIGHT_VERSION} install --with-deps chromium \
   && chown -R $USERNAME:$USERNAME /home/$USERNAME/.cache \
   && ln -sf "$(ls -d /home/$USERNAME/.cache/ms-playwright/chromium-*/chrome-linux/chrome | head -1)" /usr/local/bin/chromium \
-  && ln -sf /usr/local/bin/chromium /usr/local/bin/chromium-browser
+  && ln -sf /usr/local/bin/chromium /usr/local/bin/chromium-browser \
+  && ln -sf /home/$USERNAME/.npm-global/bin/agent-browser /usr/local/bin/agent-browser \
+  && ln -sf /home/$USERNAME/.npm-global/bin/playwright /usr/local/bin/playwright
 
 USER $USERNAME
 WORKDIR /workspace
