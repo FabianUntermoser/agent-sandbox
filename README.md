@@ -18,9 +18,14 @@ reported.
 - Browser QA is in the image: Playwright with its pinned Chromium and every shared library it
   needs, reachable as `chromium` and `chromium-browser`, so no sandbox needs an egress grant to
   download a browser. `agent-browser` ships alongside it, pointed at the same binary through
-  `AGENT_BROWSER_EXECUTABLE_PATH`. Playwright is the verified renderer; agent-browser's own
-  launcher still exits before DevTools under this container's seccomp profile, so prefer
-  Playwright for scripted QA until that is fixed upstream.
+  `AGENT_BROWSER_EXECUTABLE_PATH`. `make browser-check` renders a served fixture, clicks it and
+  screenshots it in the shipped image, which is the gate.
+- `agent-browser` cannot launch a browser in this container yet. It exits before DevTools with
+  `chrome_crashpad_handler: --database is required` and `Chrome exited before providing DevTools
+  URL`, on 0.27.0 and 0.39.1, with its own downloaded Chrome and with Playwright's, with and
+  without `--no-sandbox` and `--disable-dev-shm-usage`, and with `--security-opt seccomp=unconfined`.
+  The cause is not established, so none is claimed here. Playwright drives the same binary and
+  renders, and `make browser-check` reports the gap without failing until the launcher is fixed.
 - Every sandbox runs on its own network, with egress denied by default. [Egress](#egress) covers
   the allowlist, the host services and the ways out of it.
 - `config/base.conf` is the catalogue of what a sandbox may inherit, and `BASE=full` grants the

@@ -11,6 +11,10 @@ check:
 	./scripts/sandbox-git-fence.test.sh
 	./scripts/sandbox-firewall.test.sh
 
+# Real container: the browser is what it proves, so it needs docker and the image.
+browser-check:
+	./scripts/sandbox-browser.test.sh
+
 # Real containers: the mounts are what they prove, so they need docker and the image.
 worktree-check:
 	./scripts/sandbox-worktree.test.sh
@@ -53,4 +57,4 @@ vm-pair:
 vm-destroy:
 	./vm/vworker.sh destroy --yes
 
-.PHONY: build check worktree-check setup uninstall shell claude pi vm-create vm-start vm-stop vm-status vm-sync vm-pair vm-destroy
+.PHONY: build check browser-check worktree-check setup uninstall shell claude pi vm-create vm-start vm-stop vm-status vm-sync vm-pair vm-destroy
