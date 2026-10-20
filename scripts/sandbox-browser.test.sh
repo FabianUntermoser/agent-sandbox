@@ -30,6 +30,11 @@ cat >"$T/index.html" <<'EOF'
 </html>
 EOF
 
+# The container runs as uid 1000, which is not the invoking user on every host, so the fixture
+# has to be readable by any uid or the served response is a 404 about listing the directory.
+chmod 755 "$T"
+chmod 644 "$T/index.html"
+
 in_image() { # <script>: run it inside a fresh container of the image
 	docker run --rm --shm-size=1g -v "$T:/fixture:ro" --entrypoint /bin/bash "$IMAGE" -c "$1"
 }
