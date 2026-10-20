@@ -26,9 +26,14 @@ exit 0
 EOF
 chmod +x "$stub/docker"
 
+# The catalogue ships in the repo; the run reads it from the path setup writes on a real machine,
+# so the case points at the repo's own copy instead of whatever the host has installed.
+base_conf="$work/base.conf"
+cp "$SRC/../config/base.conf" "$base_conf"
+
 run(){ # the flags a case adds, then the command the container runs
 	rm -f "$args"
-	(cd "$work" && PATH="$stub:$PATH" "$SRC/sandbox.sh" --stdio --new "$@" true) >"$work/out" 2>&1
+	(cd "$work" && PATH="$stub:$PATH" BASE_CONF="$base_conf" "$SRC/sandbox.sh" --stdio --new "$@" true) >"$work/out" 2>&1
 }
 
 expect(){ # <want> <got> <label>
