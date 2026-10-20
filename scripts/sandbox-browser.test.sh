@@ -38,28 +38,37 @@ read -r -d '' PROBE <<'PROBE' || true
 set -u
 python3 -m http.server 8123 --directory /fixture >/tmp/http.log 2>&1 &
 server=$!
+ready=no
 for _ in $(seq 1 40); do
-  curl -fsS -o /dev/null http://127.0.0.1:8123/ 2>/dev/null && break
+  if curl -fsS -o /dev/null http://127.0.0.1:8123/ 2>/dev/null; then ready=yes; break; fi
   sleep 0.25
 done
+echo "server-ready=$ready"
+echo "server-log=$(tr "\n" " " </tmp/http.log | tail -c 200)"
 export NODE_PATH=/home/node/.npm-global/lib/node_modules
 node -e '
 const { chromium } = require("playwright");
+const fs = require("fs");
 (async () => {
-  const browser = await chromium.launch();
+  const args = ["--no-sandbox", "--disable-dev-shm-usage"];
+  console.log("launch-args=" + args.join(" "));
+  const browser = await chromium.launch({ args });
   const page = await browser.newPage({ viewport: { width: 900, height: 600 } });
   const errors = [];
   page.on("pageerror", (e) => errors.push(String(e)));
-  await page.goto("http://127.0.0.1:8123/", { waitUntil: "load" });
+  page.on("console", (m) => { if (m.type() === "error") errors.push(m.text().slice(0, 80)); });
+  const response = await page.goto("http://127.0.0.1:8123/", { waitUntil: "load", timeout: 15000 });
+  console.log("response-status=" + (response ? response.status() : "none"));
+  console.log("final-url=" + page.url());
+  console.log("body-text=" + (await page.evaluate(() => document.body.innerText.replace(/\s+/g, " ").slice(0, 120))));
   console.log("content=" + (await page.textContent("#title")));
   await page.click("#go");
   console.log("after-click=" + (await page.textContent("#title")));
   await page.screenshot({ path: "/tmp/shot.png" });
-  const fs = require("fs");
   console.log("screenshot=" + fs.statSync("/tmp/shot.png").size);
-  console.log("page-errors=" + errors.length);
+  console.log("page-errors=" + errors.length + (errors.length ? " " + errors.join("; ").slice(0, 160) : ""));
   await browser.close();
-})().catch((e) => { console.log("playwright-error=" + String(e).slice(0, 120)); process.exit(1); });
+})().catch((e) => { console.log("playwright-error=" + String(e).slice(0, 200)); process.exit(1); });
 '
 kill "$server" 2>/dev/null || true
 PROBE
@@ -87,6 +96,11 @@ if [ "$ab" = "ab" ]; then
 	ok "agent-browser launches a browser"
 else
 	gap "agent-browser cannot launch a browser in this container, tracked on its issue"
+fi
+
+if [ "$failed" -ne 0 ]; then
+	echo "  --- container output ---" >&2
+	printf '%s\n' "$out" | sed 's/^/  | /' >&2
 fi
 
 printf '\n'

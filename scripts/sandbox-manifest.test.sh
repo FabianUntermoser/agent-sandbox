@@ -19,6 +19,11 @@ reached="$work/reached"
 
 trap 'rm -rf "$work" "$stub" "$external"' EXIT
 
+# The catalogue ships in the repo; the run reads it from the path the setup writes on a real
+# machine, so the case points at the repo's own copy instead of whatever the host has installed.
+base_conf="$work/base.conf"
+cp "$SRC/../config/base.conf" "$base_conf"
+
 cat >"$external" <<EOF
 : >"$marker"
 MOUNTS=()
@@ -36,7 +41,7 @@ chmod +x "$stub/docker"
 
 run() {
 	rm -f "$reached" "$marker"
-	(cd "$work" && PATH="$stub:$PATH" "$SRC/sandbox.sh" --stdio --new "$@" true) >"$work/out" 2>&1
+	(cd "$work" && PATH="$stub:$PATH" BASE_CONF="$base_conf" "$SRC/sandbox.sh" --stdio --new "$@" true) >"$work/out" 2>&1
 }
 
 expect() {
