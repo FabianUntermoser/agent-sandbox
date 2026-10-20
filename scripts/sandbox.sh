@@ -6,6 +6,12 @@ set -euo pipefail
 
 prog=${0##*/}
 die() { printf "\e[31merror:\e[0m %s\n" "$*" >&2; exit 1; }
+
+# The grants the firewall has to resolve to an address: anything with a port except the
+# host:<port> token, which names this container's own gateway instead of a name.
+host_service_grants() {
+	printf '%s\n' $HOST_SERVICES | grep -E ':' | grep -vE '^host:[0-9]+$'
+}
 help() {
 	cat <<-EOF
 		$prog, dev container for \$PWD
@@ -35,6 +41,7 @@ help() {
 		  MOUNTS=(...)               extra host paths
 		  NETWORK=host               host networking (default: bridge + firewall)
 		  HOST_SERVICES=ollama       open the host gateway on 11434
+		  HOST_SERVICES=host:1313    open the host gateway on 1313, no name to resolve
 		  HOST_SERVICES=name:443     open that name through the host, on that port
 		  TOOLS="linear"             tools granted from ~/.config/agent-sandbox/tools.d, one KEY=value file per tool
 	EOF
@@ -962,8 +969,9 @@ bridge | offline | "")
 		closed+=("closed=$subnet")
 	done < <(printf '%s\n' "$subnets" | tr ' ' '\n' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+/[0-9]+$' | sort -u)
 	if [ ${#closed[@]} -eq 0 ]; then
-		# The guard a <host>:<port> grant rests on cannot be drawn without them.
-		if printf '%s\n' $HOST_SERVICES | grep -q ':'; then
+		# The guard a <host>:<port> grant rests on cannot be drawn without them. A host:<port>
+		# token names the gateway itself and resolves nothing, so it does not need the guard.
+		if host_service_grants | grep -q ':'; then
 			die "no docker network has a subnet, so a <host>:<port> grant could reach a sibling container"
 		fi
 		echo -e "  \e[33mno docker network has a subnet, so a grant could reach a sibling container.\e[0m" >&2
@@ -976,12 +984,18 @@ bridge | offline | "")
 		die "cannot create the grant file in $services_dir"
 	{
 		printf '%s\n' "${closed[@]}"
-		printf '%s\n' $HOST_SERVICES | grep -E ':' || true
+		# A name:port grant resolves at start, so it goes in the file. A host:port grant names the
+		# gateway itself and travels in the argv below, which is why it is filtered out here.
+		host_service_grants | grep -E ':' || true
 		# A tool's egress is a name and a port, resolved when the firewall starts: the image
 		# bakes no per-tool address list, so a new tool needs no rebuild and a host may move.
 		for grant in "${tool_host_grants[@]}"; do printf '%s\n' "$grant"; done
 	} >"$services"
-	fixed_services=$(printf '%s\n' $HOST_SERVICES | grep -v ':' | tr '\n' ' ' || true)
+	fixed_services=$(
+		{ printf '%s\n' $HOST_SERVICES | grep -v ':' || true
+		  printf '%s\n' $HOST_SERVICES | grep -E '^host:[0-9]+$' || true
+		} | tr '\n' ' '
+	)
 	run+=(-v "$services:/etc/agent-sandbox-host-services:ro")
 	if [ -n "$HOST_SERVICES" ]; then
 		run+=(--add-host=host.docker.internal:host-gateway)

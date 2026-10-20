@@ -64,6 +64,12 @@ fi
 for svc in "$@"; do
   case "$svc" in
   ollama) ;;
+  host:*)
+    if ! [[ ${svc#host:} =~ ^[0-9]{1,5}$ ]] || ((10#${svc#host:} < 1 || 10#${svc#host:} > 65535)); then
+      echo "error: unknown argument '$svc', a host grant needs host:<port>" >&2
+      exit 1
+    fi
+    ;;
   *) echo "error: unknown argument '$svc', the grant comes from $SERVICES" >&2
      exit 1 ;;
   esac
@@ -183,6 +189,14 @@ for svc in "$@"; do
   ollama)
     if [[ -n "$GW" ]]; then
       iptables -A OUTPUT -d "$GW" -p tcp --dport 11434 -j ACCEPT
+    fi
+    ;;
+  host:*)
+    # One port on this container's own gateway, for a dev server that runs on the host.
+    # It names the gateway directly, so it never resolves a name and never widens a net.
+    port=${svc#host:}
+    if [[ -n "$GW" ]]; then
+      iptables -A OUTPUT -d "$GW" -p tcp --dport "$port" -j ACCEPT
     fi
     ;;
   esac
