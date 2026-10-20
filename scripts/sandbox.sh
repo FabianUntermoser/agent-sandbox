@@ -626,7 +626,7 @@ while read -r kind path opts; do
 				echo "  link not followed (outside every follow root): ${link#"$path"/} -> $target" >&2
 				continue
 			fi
-			add_mount "$target" "/home/$RUSER/${link#"$HOME"/}"
+			add_mount "$target" "/home/$RUSER/${link#"$HOME"/}" ro
 		done < <(find "$path" -maxdepth 3 -type l -print0 2>/dev/null)
 	fi
 done <"$BASE_CONF"
@@ -991,7 +991,8 @@ validate_mounts
 # A manifest may publish TCP ports back to the host. The host side is always loopback;
 # broad host interfaces are not grantable through this shortcut. The mapping is host:container.
 port_publish_args=()
-declare -A _seen_host_ports=()
+published_container_ports=()
+declare -A _seen_host_ports=() _seen_container_ports=()
 for mapping in "${PORTS[@]}"; do
     if [[ "$mapping" =~ ^([0-9]{1,5}):([0-9]{1,5})$ ]]; then
         host_raw="${BASH_REMATCH[1]}"
@@ -1005,6 +1006,10 @@ for mapping in "${PORTS[@]}"; do
     (( container_port >= 1 && container_port <= 65535 )) || die "invalid container port in PORTS entry '$mapping'"
     [ -z "${_seen_host_ports[$host_port]:-}" ] || die "host port $host_port is published more than once"
     _seen_host_ports[$host_port]=1
+    if [ -z "${_seen_container_ports[$container_port]:-}" ]; then
+        _seen_container_ports[$container_port]=1
+        published_container_ports+=("$container_port")
+    fi
     port_publish_args+=(--publish "127.0.0.1:${host_port}:${container_port}/tcp")
 done
 if [ "${#port_publish_args[@]}" -gt 0 ] && [ "$NETWORK" = host ]; then
@@ -1079,6 +1084,7 @@ bridge | offline | "")
 		# A tool's egress is a name and a port, resolved when the firewall starts: the image
 		# bakes no per-tool address list, so a new tool needs no rebuild and a host may move.
 		for grant in "${tool_host_grants[@]}"; do printf '%s\n' "$grant"; done
+		for port in "${published_container_ports[@]}"; do printf 'published:%s\n' "$port"; done
 	} >"$services"
 	fixed_services=$(
 		{ printf '%s\n' $HOST_SERVICES | grep -v ':' || true

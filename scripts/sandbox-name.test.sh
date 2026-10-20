@@ -16,6 +16,7 @@ trap 'rm -rf "$work" "$stub"' EXIT
 
 args="$work/run.args"
 inspect_args="$work/inspect.args"
+mkdir -p "$work/runtime"
 
 cat >"$stub/docker" <<EOF
 #!/usr/bin/env bash
@@ -47,7 +48,7 @@ cp "$SRC/../config/base.conf" "$base_conf"
 
 run(){ # the flags a case adds, then the command the container runs
 	rm -f "$args"
-	(cd "$work" && PATH="$stub:$PATH" BASE_CONF="$base_conf" "$SRC/sandbox.sh" --stdio --new "$@" true) >"$work/out" 2>&1
+	(cd "$work" && PATH="$stub:$PATH" HOME="$work/home" XDG_RUNTIME_DIR="$work/runtime" BASE_CONF="$base_conf" "$SRC/sandbox.sh" --stdio --new "$@" true) >"$work/out" 2>&1
 }
 
 expect(){ # <want> <got> <label>
@@ -109,6 +110,13 @@ printf 'MOUNTS=()\nPORTS=("8130:3000")\n' >"$port_manifest"
 printf '  reverse port publishing\n'
 run --manifest "$port_manifest" || true
 expect yes "$(got '127.0.0.1:8130:3000/tcp')" 'PORTS maps the sandbox port onto host loopback'
+services_mount=$(grep -F '/etc/agent-sandbox-host-services:ro' "$args" | sed 's#:/etc/agent-sandbox-host-services:ro$##' | tail -1)
+if [ -n "$services_mount" ] && grep -qx 'published:3000' "$services_mount"; then
+  printf '  ok    the firewall grant file includes the published container port\n'
+else
+  printf '  FAIL  the firewall grant file does not include published:3000\n' >&2
+  failed=1
+fi
 
 printf 'MOUNTS=()\nPORTS=("0:3000")\n' >"$port_manifest"
 run --manifest "$port_manifest" || true

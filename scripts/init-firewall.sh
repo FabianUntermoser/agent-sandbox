@@ -40,6 +40,7 @@ source "$PUBLIC_IP_LIB"
 SERVICES=${SERVICES:-/etc/agent-sandbox-host-services}
 grants=()
 closed_nets=()
+published_ports=()
 if [[ -f $SERVICES ]]; then
   while read -r entry; do
     case "$entry" in '' | \#*) continue ;; esac
@@ -49,6 +50,20 @@ if [[ -f $SERVICES ]]; then
         exit 1
       fi
       closed_nets+=("${entry#closed=}")
+      continue
+    fi
+    if [[ $entry == published:* ]]; then
+      port=${entry#published:}
+      if ! [[ $port =~ ^[0-9]{1,5}$ ]]; then
+        echo "error: published port '$entry' in $SERVICES is not a TCP port" >&2
+        exit 1
+      fi
+      port=$((10#$port))
+      if ((port < 1 || port > 65535)); then
+        echo "error: published port '$entry' in $SERVICES is outside 1..65535" >&2
+        exit 1
+      fi
+      published_ports+=("$port")
       continue
     fi
     svc_port=${entry##*:}
@@ -74,6 +89,15 @@ for svc in "$@"; do
      exit 1 ;;
   esac
 done
+
+# Docker's loopback publisher reaches a bridge-network container from its gateway address. Refuse
+# the grant before changing any rules if that gateway cannot be identified; otherwise allow only
+# that source to reach the declared container TCP ports (not sibling containers on the bridge).
+GW=$(ip route | awk '/^default/ {print $3; exit}')
+if ((${#published_ports[@]} > 0)) && [[ -z $GW ]]; then
+  echo "error: cannot determine the container gateway for published ports" >&2
+  exit 1
+fi
 
 ## COLLECT
 
@@ -130,6 +154,9 @@ iptables -A INPUT  -p udp --sport 53 -j ACCEPT
 iptables -A OUTPUT -p tcp --dport 53 -j ACCEPT
 iptables -A INPUT  -p tcp --sport 53 -j ACCEPT
 iptables -A INPUT  -i lo -j ACCEPT
+for port in "${published_ports[@]}"; do
+  iptables -A INPUT -s "$GW" -p tcp --dport "$port" -j ACCEPT
+done
 iptables -A OUTPUT -o lo -j ACCEPT
 
 ## ALLOWLIST
@@ -182,7 +209,6 @@ on_closed_net() {
   return 1
 }
 
-GW=$(ip route | awk '/^default/ {print $3; exit}')
 svc_refused=0
 for svc in "$@"; do
   case "$svc" in

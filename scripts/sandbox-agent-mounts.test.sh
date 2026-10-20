@@ -87,11 +87,11 @@ baseconf "follow $farm    grant=AGENTS" 'dir   ~/.pi'
 run
 
 expect 'a linked file arrives at the guest path the link occupies' yes \
-	"$farm/pi/agent/models.json:/home/node/.pi/agent/models.json" ok
+	"$farm/pi/agent/models.json:/home/node/.pi/agent/models.json:ro" ok
 expect 'and so does the second one' yes \
-	"$farm/pi/agent/auth.json:/home/node/.pi/agent/auth.json" ok
+	"$farm/pi/agent/auth.json:/home/node/.pi/agent/auth.json:ro" ok
 expect 'a linked directory does too' yes \
-	"$farm/pi/agent/skills/first:/home/node/.pi/agent/skills/first" ok
+	"$farm/pi/agent/skills/first:/home/node/.pi/agent/skills/first:ro" ok
 expect 'the directory itself is still mounted, so its own files arrive' yes \
 	"$home/.pi:/home/node/.pi" ok
 

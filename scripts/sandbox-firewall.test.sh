@@ -36,7 +36,7 @@ exit 0
 STUB
 cat >>"$T/bin/ip" <<'STUB'
 case "${1:-}" in
-route) echo "default via 172.18.0.1 dev eth0" ;;
+route) if printenv FAKE_NO_GW >/dev/null; then :; else echo "default via 172.18.0.1 dev eth0"; fi ;;
 -4) echo "2: eth0    inet 172.18.0.5/16 brd 172.18.255.255 scope global eth0" ;;
 esac
 STUB
@@ -145,6 +145,19 @@ chk "the DROP policies are the first calls after the flush" "$(after_flush)" "$D
 chk "and the last calls on the way out" "$(last_policies)" "$DROP"
 chk "no policy is ever set to ACCEPT" "$(never_accept)" "0"
 
+printf '  a published container TCP port\n'
+fw published:3000
+chk "the firewall run succeeds" "$rc" "0"
+chk "the declared port accepts publisher traffic from the bridge gateway" "$(count '-A INPUT -s 172.18.0.1 -p tcp --dport 3000 -j ACCEPT')" "1"
+chk "the port is not opened to arbitrary sibling-container sources" "$(count '-A INPUT -p tcp --dport 3000 -j ACCEPT')" "0"
+chk "no other service port is opened inbound" "$(ipt | grep -c -- '--dport 3001' || true)" "0"
+
+printf '  a published port without a gateway\n'
+FAKE_NO_GW=1 fw published:3000
+chk "the run fails closed when no container gateway can be determined" "$([ "$rc" -ne 0 ] && echo yes || echo no)" "yes"
+chk "no firewall rule set is flushed before the refusal" "$(grep -c '^iptables -F$' "$T/calls" || true)" "0"
+chk "the refusal explains the missing gateway" "$(says 'cannot determine the container gateway for published ports')" "yes"
+
 printf '  a host grant with a bad port\n'
 for bad in host:0 host:70000 host:abc host:; do
 	fw -- "$bad"
@@ -165,7 +178,7 @@ for refused in own.example:172.18.0.9 sib.example:172.30.0.4 lo.example:127.0.0.
 done
 
 printf '  an entry the checks refuse\n'
-for case in 'malformed entry|no-port-here|' 'bad CIDR|closed=10.0.0.0/33|' 'unknown argv token||proxy.example:80'; do
+for case in 'malformed entry|no-port-here|' 'bad CIDR|closed=10.0.0.0/33|' 'bad published port|published:abc|' 'out-of-range published port|published:65536|' 'zero published port|published:0|' 'unknown argv token||proxy.example:80'; do
 	label=${case%%|*}
 	rest=${case#*|}
 	line=${rest%%|*}
