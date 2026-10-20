@@ -27,6 +27,8 @@ reported.
   whole set. See [What a sandbox inherits](#what-a-sandbox-inherits).
 - Skills come from `.agents/skills/`: with `pi` in `AGENTS` the sandbox mounts `~/.agents`, so pi
   finds the skills the host finds.
+- `HOST_SERVICES=host:<port>` opens one port on the sandbox's own gateway, for a dev server that
+  runs on the host, and needs no name to resolve.
 - `HOST_SERVICES` opens one named service off the public internet, on a tailnet or on a LAN,
   without host networking. See [Egress](#egress).
 
@@ -283,6 +285,7 @@ LOCAL_BIN=true            # ~/.local/bin
 TMUX=true                 # ~/.tmux.conf
 NETWORK=host              # host networking; default is bridge + firewall
 HOST_SERVICES=ollama      # open the host gateway on port 11434
+HOST_SERVICES=host:1313   # or any one port on the gateway, for a dev server on the host
 HOST_SERVICES=name:443    # or one name the host routes to, on that port
 TOOLS="linear"            # tools granted from ~/.config/agent-sandbox/tools.d
 MOUNTS=(                  # extra host paths: "src:dest" per line
