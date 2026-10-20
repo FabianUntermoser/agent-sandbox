@@ -86,10 +86,25 @@ RUN chmod +x /usr/local/bin/init-firewall.sh /tmp/generate-allowlist.sh \
 # codex:  @openai/codex
 ENV PATH=/home/$USERNAME/.local/bin:/home/$USERNAME/.local/pipx/bin:/home/$USERNAME/.npm-global/bin:$PATH \
     PIPX_BIN_DIR=/home/$USERNAME/.local/pipx/bin \
-    NPM_CONFIG_PREFIX=/home/$USERNAME/.npm-global
+    NPM_CONFIG_PREFIX=/home/$USERNAME/.npm-global \
+    AGENT_BROWSER_EXECUTABLE_PATH=/usr/local/bin/chromium \
+    AGENT_BROWSER_ARGS=--no-sandbox,--disable-dev-shm-usage
 
 RUN pipx install whisper-ctranslate2
-RUN npm install -g @anthropic-ai/claude-code @earendil-works/pi-coding-agent @openai/codex
+RUN npm install -g @anthropic-ai/claude-code @earendil-works/pi-coding-agent @openai/codex agent-browser@0.39.1
+
+# Browser QA. This base ships neither a browser nor the libraries one needs, and the
+# runtime firewall allows no download, so the browser is installed here, where the build
+# has network. Playwright's pinned Chromium is the verified renderer: it launches and
+# paints in this image. agent-browser is installed as the CLI front end and pointed at
+# the same binary through AGENT_BROWSER_EXECUTABLE_PATH.
+ARG PLAYWRIGHT_VERSION=1.56.1
+ENV PLAYWRIGHT_BROWSERS_PATH=/home/$USERNAME/.cache/ms-playwright
+RUN npm install -g playwright@${PLAYWRIGHT_VERSION} \
+  && npx --yes playwright@${PLAYWRIGHT_VERSION} install --with-deps chromium \
+  && chown -R $USERNAME:$USERNAME /home/$USERNAME/.cache \
+  && ln -sf "$(ls -d /home/$USERNAME/.cache/ms-playwright/chromium-*/chrome-linux/chrome | head -1)" /usr/local/bin/chromium \
+  && ln -sf /usr/local/bin/chromium /usr/local/bin/chromium-browser
 
 USER $USERNAME
 WORKDIR /workspace

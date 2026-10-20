@@ -15,6 +15,12 @@ symlinks are not followed, and a target in the vault, `~/.ssh` or `~/.gnupg` is 
 reported.
 - Shell, aliasrc, Claude settings and the CLIs (ollama, glab, ant, acli) are in the image, not
   mounted from the host.
+- Browser QA is in the image: Playwright with its pinned Chromium and every shared library it
+  needs, reachable as `chromium` and `chromium-browser`, so no sandbox needs an egress grant to
+  download a browser. `agent-browser` ships alongside it, pointed at the same binary through
+  `AGENT_BROWSER_EXECUTABLE_PATH`. Playwright is the verified renderer; agent-browser's own
+  launcher still exits before DevTools under this container's seccomp profile, so prefer
+  Playwright for scripted QA until that is fixed upstream.
 - Every sandbox runs on its own network, with egress denied by default. [Egress](#egress) covers
   the allowlist, the host services and the ways out of it.
 - `config/base.conf` is the catalogue of what a sandbox may inherit, and `BASE=full` grants the
