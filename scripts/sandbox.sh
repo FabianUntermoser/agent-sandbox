@@ -1015,6 +1015,12 @@ done
 if [ "${#port_publish_args[@]}" -gt 0 ] && [ "$NETWORK" = host ]; then
     die "PORTS cannot be combined with NETWORK=host; publish a loopback port from a bridge network instead"
 fi
+if [ "${#port_publish_args[@]}" -gt 0 ]; then
+    # Before Engine 28.0.0 a host on the same LAN can route to a port published on 127.0.0.1.
+    engine=$(docker version --format '{{.Server.Version}}' 2>/dev/null) || engine=""
+    [[ $engine =~ ^([0-9]+)\. ]] && (( 10#${BASH_REMATCH[1]} >= 28 )) ||
+        die "PORTS needs Docker Engine 28.0.0 or newer (got '${engine:-unknown}')"
+fi
 
 TTY_FLAG="-t"
 if [ -n "$STDIO" ]; then

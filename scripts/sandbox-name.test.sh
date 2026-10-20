@@ -22,6 +22,7 @@ cat >"$stub/docker" <<EOF
 #!/usr/bin/env bash
 case "\$1" in
 	info) : ;;
+	version) printf '%s\n' "\${STUB_ENGINE-29.0.0}" ;;
 	run) printf '%s\n' "\$@" >"$args" ;;
 	ps)
 		case "\$*" in
@@ -117,6 +118,13 @@ else
   printf '  FAIL  the firewall grant file does not include published:3000\n' >&2
   failed=1
 fi
+
+for engine in 27.5.1 '' not-a-version; do
+  STUB_ENGINE=$engine run --manifest "$port_manifest" || true
+  expect no "$(ran)" "PORTS refuses Docker Engine '$engine' before docker run"
+done
+STUB_ENGINE=28.0.0 run --manifest "$port_manifest" || true
+expect yes "$(got '127.0.0.1:8130:3000/tcp')" 'PORTS accepts Docker Engine 28.0.0'
 
 printf 'MOUNTS=()\nPORTS=("0:3000")\n' >"$port_manifest"
 run --manifest "$port_manifest" || true
