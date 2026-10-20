@@ -2,8 +2,8 @@
 # Standalone firewalled dev container for AI agents.
 # Dependencies grouped by agent so you can see what each needs.
 
-ARG NODE_VERSION=22-bookworm
-ARG NODE_DIGEST=sha256:0e5f906573693feaa1e21057ebdcfdb5bd5021f050b2dc7c9deceb629c7da2a8
+ARG NODE_VERSION=24-bookworm-slim
+ARG NODE_DIGEST=sha256:51b1100cc2a83d370c6a60952e3f2989c8a43159d0e38586e090f3b3326efefd
 
 FROM node:${NODE_VERSION}@${NODE_DIGEST}
 

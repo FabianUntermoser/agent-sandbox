@@ -15,12 +15,26 @@ stub="$(mktemp -d)"
 trap 'rm -rf "$work" "$stub"' EXIT
 
 args="$work/run.args"
+inspect_args="$work/inspect.args"
 
 cat >"$stub/docker" <<EOF
 #!/usr/bin/env bash
 case "\$1" in
+	info) : ;;
 	run) printf '%s\n' "\$@" >"$args" ;;
-	ps)  [ -n "\${STUB_PS:-}" ] && printf '%s\n' "\$STUB_PS" ;;
+	ps)
+		case "\$*" in
+			*'{{.Label "agent-sandbox.managed"}}'*)
+				[ -n "\${STUB_LEGACY:-}" ] && printf '%s\tUp 3 minutes\tagent-sandbox\tfalse\t\n' "\$STUB_LEGACY"
+				printf '%s\tUp 2 minutes\tagent-sandbox\ttrue\t/tmp/project\n' "\${STUB_PS:-sandbox-listed-item}" ;;
+			*)
+				[ -n "\${STUB_PS:-}" ] && printf '%s\n' "\$STUB_PS" ;;
+		esac
+		;;
+	container)
+		printf '%s\n' "\$@" >"$inspect_args"
+		printf '%s\n' 'name:       /sandbox-cli-test' 'status:     running' 'image:      agent-sandbox' 'project:    /tmp/project' 'manifest:   /tmp/project/.sandbox.conf' 'network:    agent-sandbox-net' 'published:  {"3000/tcp":[{"HostIp":"127.0.0.1","HostPort":"8130"}]}' 'cap-add:    ["NET_ADMIN","NET_RAW"]' 'cap-drop:   null' 'mounts:' '  /tmp/project -> /tmp/project (rw)'
+		;;
 esac
 exit 0
 EOF
@@ -75,6 +89,62 @@ if STUB_PS=probe-one run --name probe-one; then
 	expect stopped ran "a taken name is refused"
 else
 	expect no "$(ran)" "a taken name stops the run before docker"
+fi
+
+
+
+printf '  no arguments shows help rather than launching a shell\n'
+if (cd "$work" && PATH="$stub:$PATH" "$SRC/sandbox.sh") >"$work/out" 2>&1 &&
+	grep -q 'interactive shell' "$work/out" &&
+	! grep -q "image 'agent-sandbox' not found" "$work/out"; then
+	printf '  ok    no arguments shows help without launching\n'
+else
+	printf '  FAIL  no arguments did not show help\n' >&2
+	sed 's/^/        /' "$work/out" >&2
+	failed=1
+fi
+
+port_manifest="$work/ports.conf"
+printf 'MOUNTS=()\nPORTS=("8130:3000")\n' >"$port_manifest"
+printf '  reverse port publishing\n'
+run --manifest "$port_manifest" || true
+expect yes "$(got '127.0.0.1:8130:3000/tcp')" 'PORTS maps the sandbox port onto host loopback'
+
+printf 'MOUNTS=()\nPORTS=("0:3000")\n' >"$port_manifest"
+run --manifest "$port_manifest" || true
+expect no "$(ran)" 'port zero refuses launch before docker'
+
+printf 'MOUNTS=()\nPORTS=("8130:3000" "8130:5173")\n' >"$port_manifest"
+run --manifest "$port_manifest" || true
+expect no "$(ran)" 'duplicate host port refuses launch before docker'
+
+printf 'MOUNTS=()\nNETWORK=host\nPORTS=("8130:3000")\n' >"$port_manifest"
+run --manifest "$port_manifest" || true
+expect no "$(ran)" 'PORTS cannot be combined with host networking'
+
+printf '  --list includes running managed and legacy sandboxes\n'
+if (cd "$work" && PATH="$stub:$PATH" STUB_PS=sandbox-listed-item STUB_LEGACY=custom-named-sandbox "$SRC/sandbox.sh" --list) >"$work/out" 2>&1 &&
+	grep -q 'sandbox-listed-item' "$work/out" &&
+	grep -q 'custom-named-sandbox' "$work/out"; then
+	printf '  ok    --list reports managed, default-named and legacy custom-named sandboxes\n'
+else
+	printf '  FAIL  --list did not list sandboxes\n' >&2
+	sed 's/^/        /' "$work/out" >&2
+	failed=1
+fi
+
+printf '  inspect shows effective Docker configuration\n'
+if (cd "$work" && PATH="$stub:$PATH" STUB_PS=sandbox-cli-test "$SRC/sandbox.sh" inspect) >"$work/out" 2>&1 &&
+	grep -q 'image:      agent-sandbox' "$work/out" &&
+	grep -q 'network:    agent-sandbox-net' "$work/out" &&
+	grep -q 'published:  .*127.0.0.1' "$work/out" &&
+	grep -q 'mounts:' "$work/out" &&
+	grep -q -- '--format' "$inspect_args"; then
+	printf '  ok    inspect reports image, network, ports, capabilities and mounts\n'
+else
+	printf '  FAIL  inspect did not show effective Docker configuration\n' >&2
+	sed 's/^/        /' "$work/out" >&2
+	failed=1
 fi
 
 [[ $failed == 0 ]] && echo "sandbox-name: ok"

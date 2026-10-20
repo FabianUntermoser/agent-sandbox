@@ -28,7 +28,7 @@ uninstall:
 	rm -f $(HOME)/.local/bin/sandbox.sh
 
 shell: build
-	./scripts/sandbox.sh
+	./scripts/sandbox.sh shell
 
 claude: build
 	./scripts/sandbox.sh claude

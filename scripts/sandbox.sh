@@ -16,10 +16,12 @@ help() {
 	cat <<-EOF
 		$prog, dev container for \$PWD
 
-		  $prog                      interactive shell
+		  $prog shell                interactive shell
 		  $prog <command...>         run any command
 		  $prog claude [args]        Claude Code
 		  $prog pi [args]            pi coding agent
+		  $prog list [--all]         list sandboxes (running by default; --all includes retained stops)
+		  $prog inspect [container]  inspect effective image, network, ports and mounts
 		  --stdio                    stdio straight through, no tmux (paseo provider)
 		  --manifest <path>          manifest to source instead of $PWD/.sandbox.conf; a path
 		                             outside the project lets one run use a generated manifest
@@ -44,8 +46,66 @@ help() {
 		  HOST_SERVICES=host:1313    open the host gateway on 1313, no name to resolve
 		  HOST_SERVICES=name:443     open that name through the host, on that port
 		  TOOLS="linear"             tools granted from ~/.config/agent-sandbox/tools.d, one KEY=value file per tool
+		  PORTS=("8130:3000")       publish sandbox TCP 3000 to host 127.0.0.1:8130
+		                             (never exposed to the LAN by default)
 	EOF
 }
+
+
+# Operator commands intentionally run before the project manifest or image is loaded.
+# Inspection reads Docker's effective settings instead of independently re-resolving the manifest.
+if [ "$#" -eq 0 ]; then
+    help
+    exit 0
+fi
+case "$1" in
+    list|--list)
+        shift
+        show_all=
+        if [ "${1:-}" = "--all" ]; then show_all=--all; shift; fi
+        [ "$#" -eq 0 ] || die "list accepts only --all"
+        docker info >/dev/null 2>&1 || die "Docker is unavailable"
+        # Include old default-named sandboxes during migration as well as explicit names
+        # that carry our label. Use delimiter-separated output so project paths may contain spaces.
+        docker ps $show_all --format '{{.Names}}\t{{.Status}}\t{{.Image}}\t{{.Label "agent-sandbox.managed"}}\t{{.Label "agent-sandbox.project"}}' |
+            awk -F '\t' 'BEGIN { printf "%-38s %-16s %-28s %s\n", "NAME", "STATUS", "IMAGE", "PROJECT" }
+                NF >= 3 && ($1 ~ /^sandbox-/ || $4 == "true" || $3 ~ /(^|\/)agent-sandbox([:@]|$)/) {
+                    printf "%-38s %-16s %-28s %s\n", $1, $2, $3, $5
+                }'
+        exit $?
+        ;;
+    inspect|--inspect)
+        shift
+        [ "$#" -le 1 ] || die "inspect accepts at most one container name"
+        target=""
+        if [ "$#" -eq 1 ]; then target="$1"; fi
+        if [ -z "$target" ]; then
+            project="$PWD"
+            candidates="$(docker ps --all --filter label=agent-sandbox.managed=true --filter "label=agent-sandbox.project=$project" --format '{{.Names}}')"
+            if [ -z "$candidates" ]; then
+                derived="sandbox-$(basename "$PWD" | sed 's#[^a-zA-Z0-9_.-]#-#g')"
+                if docker container inspect "$derived" >/dev/null 2>&1; then candidates="$derived"; fi
+            fi
+            [ -n "$candidates" ] || die "no managed sandbox found for $project; use: $prog list --all"
+            [ "$(printf '%s\n' "$candidates" | wc -l)" -eq 1 ] || die "multiple sandboxes for this project; choose one: $candidates"
+            target="$candidates"
+        fi
+        docker container inspect --format '
+name:       {{.Name}}
+status:     {{.State.Status}}
+image:      {{.Config.Image}}
+project:    {{if index .Config.Labels "agent-sandbox.project"}}{{index .Config.Labels "agent-sandbox.project"}}{{else}}legacy / unlabelled{{end}}
+manifest:   {{if index .Config.Labels "agent-sandbox.manifest"}}{{index .Config.Labels "agent-sandbox.manifest"}}{{else}}not recorded{{end}}
+network:    {{.HostConfig.NetworkMode}}
+published:  {{json .HostConfig.PortBindings}}
+cap-add:    {{json .HostConfig.CapAdd}}
+cap-drop:   {{json .HostConfig.CapDrop}}
+mounts:
+{{range .Mounts}}  {{.Source}} -> {{.Destination}} ({{if .RW}}rw{{else}}ro{{end}})
+{{end}}' "$target" || die "cannot inspect container '$target'"
+        exit 0
+        ;;
+esac
 
 ## DEFAULTS
 
@@ -70,6 +130,7 @@ HOST_SERVICES=
 BASE=
 MOUNTS=()
 TOOLS=
+PORTS=()
 
 
 ## ARGS
@@ -120,6 +181,7 @@ case "${1:-}" in
 	"")        set -- zsh ;;
 	claude)    set -- claude --dangerously-skip-permissions "${@:2}" ;;
 	pi)        set -- bash -c 'export PATH=$HOME/.npm-global/bin:$PATH; exec pi "$@"' bash "${@:2}" ;;
+	shell)     set -- zsh ;;
 	ollama)    set -- bash -c 'export PATH=$HOME/.npm-global/bin:$PATH; exec ollama "$@"' bash "${@:2}" ;;
 esac
 if [ -z "$VERBOSE" ] && [ -z "$STDIO" ]; then
@@ -926,6 +988,29 @@ fi
 
 validate_mounts
 
+# A manifest may publish TCP ports back to the host. The host side is always loopback;
+# broad host interfaces are not grantable through this shortcut. The mapping is host:container.
+port_publish_args=()
+declare -A _seen_host_ports=()
+for mapping in "${PORTS[@]}"; do
+    if [[ "$mapping" =~ ^([0-9]{1,5}):([0-9]{1,5})$ ]]; then
+        host_raw="${BASH_REMATCH[1]}"
+        container_raw="${BASH_REMATCH[2]}"
+    else
+        die "invalid PORTS entry '$mapping' (expected host:container, e.g. 8130:3000)"
+    fi
+    host_port=$((10#$host_raw))
+    container_port=$((10#$container_raw))
+    (( host_port >= 1 && host_port <= 65535 )) || die "invalid host port in PORTS entry '$mapping'"
+    (( container_port >= 1 && container_port <= 65535 )) || die "invalid container port in PORTS entry '$mapping'"
+    [ -z "${_seen_host_ports[$host_port]:-}" ] || die "host port $host_port is published more than once"
+    _seen_host_ports[$host_port]=1
+    port_publish_args+=(--publish "127.0.0.1:${host_port}:${container_port}/tcp")
+done
+if [ "${#port_publish_args[@]}" -gt 0 ] && [ "$NETWORK" = host ]; then
+    die "PORTS cannot be combined with NETWORK=host; publish a loopback port from a bridge network instead"
+fi
+
 TTY_FLAG="-t"
 if [ -n "$STDIO" ]; then
 	# pipes, not a tty: a tty echoes the request stream and rewrites its endings
@@ -936,12 +1021,16 @@ fi
 
 run=(docker run --rm $TTY_FLAG \
 	--name "$NAME" \
+	--label agent-sandbox.managed=true \
+	--label "agent-sandbox.project=$WORK" \
+	--label "agent-sandbox.manifest=$manifest_path" \
 	--hostname sandbox \
 	-e "COLORTERM=${COLORTERM:-truecolor}" \
 	-e DISABLE_AUTOUPDATER=1 \
 	-e DISABLE_TELEMETRY=1 \
 	-w "$WORK" \
 	"${mounts[@]}")
+run+=("${port_publish_args[@]}")
 
 case "$NETWORK" in
 host)

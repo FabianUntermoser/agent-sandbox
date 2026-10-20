@@ -20,12 +20,12 @@ reported.
   download a browser. `agent-browser` ships alongside it, pointed at the same binary through
   `AGENT_BROWSER_EXECUTABLE_PATH`. `make browser-check` renders a served fixture, clicks it and
   screenshots it in the shipped image, which is the gate.
-- `agent-browser` cannot launch a browser in this container yet. It exits before DevTools with
-  `chrome_crashpad_handler: --database is required` and `Chrome exited before providing DevTools
-  URL`, on 0.27.0 and 0.39.1, with its own downloaded Chrome and with Playwright's, with and
-  without `--no-sandbox` and `--disable-dev-shm-usage`, and with `--security-opt seccomp=unconfined`.
-  The cause is not established, so none is claimed here. Playwright drives the same binary and
-  renders, and `make browser-check` reports the gap without failing until the launcher is fixed.
+- The last verified image used Node 22 and `agent-browser` 0.39.1 failed before DevTools with
+  `chrome_crashpad_handler: --database is required` / `Chrome exited before providing DevTools URL`.
+  That package requires Node 24 or later, so the image is now pinned to the existing Node 24 base
+  used by `gpt-plugin`. This branch has not yet rebuilt the image or rerun `make browser-check`, so
+  whether the version alignment fixes the launcher remains unverified. Playwright was the working
+  browser-QA path in the prior image; keep its fixture check as the gate.
 - Every sandbox runs on its own network, with egress denied by default. [Egress](#egress) covers
   the allowlist, the host services and the ways out of it.
 - `config/base.conf` is the catalogue of what a sandbox may inherit, and `BASE=full` grants the
@@ -34,6 +34,10 @@ reported.
   finds the skills the host finds.
 - `HOST_SERVICES=host:<port>` opens one port on the sandbox's own gateway, for a dev server that
   runs on the host, and needs no name to resolve.
+- `PORTS=("8130:3000")` publishes TCP port 3000 from the sandbox on host loopback port
+  8130. This is the reverse direction: a browser on the host can reach the sandbox's dev server at
+  127.0.0.1:8130. The server should bind to 0.0.0.0 inside the container; the host binding stays
+  on 127.0.0.1 and is not exposed to the LAN.
 - `HOST_SERVICES` opens one named service off the public internet, on a tailnet or on a LAN,
   without host networking. See [Egress](#egress).
 
@@ -76,19 +80,27 @@ make build
 make setup
 
 # run in any project directory
-make shell                 # interactive shell
-make claude                # Claude Code
-make pi                    # pi coding agent
+make shell                       # explicit interactive shell
+make claude                      # Claude Code
+make pi                          # pi coding agent
+
+# operator commands (no arguments means help)
+sandbox.sh
+sandbox.sh --list                # running sandboxes, including legacy names and agent-sandbox images
+sandbox.sh --list --all          # also show stopped containers Docker retained
+sandbox.sh inspect               # current project's effective Docker config
+sandbox.sh inspect <container>   # inspect a specific container
 
 # or use the script directly
+sandbox.sh shell
 sandbox.sh claude --dangerously-skip-permissions
 sandbox.sh codex
 sandbox.sh pi
-sandbox.sh ollama launch claude   # ollama-managed agent launch
-sandbox.sh --network=host pi       # host network, for the host ollama
+sandbox.sh ollama launch claude  # ollama-managed agent launch
+sandbox.sh --network=host pi     # host network, for the host ollama
 ```
 
-Running `sandbox.sh` again in the same directory reattaches to the existing container. `--new`
+`sandbox.sh shell` reattaches to the existing container in the same directory. `--new`
 forces a fresh one, and `--name <container>` names the container instead of `sandbox-<project>`,
 which is what a caller that runs several containers for one project needs.
 
@@ -100,7 +112,7 @@ mounted at its real host path, which is the key pi uses to find a directory's se
 Claude `--resume` and pi's project key match between host and container.
 
 ```sh
-sandbox.sh                    # container still up: reattaches, tmux layout intact
+sandbox.sh shell              # container still up: reattaches, tmux layout intact
 sandbox.sh pi -c              # container gone: continue the last session of this directory
 sandbox.sh pi -r              # pick a session
 sandbox.sh pi --session <id>  # exact session
@@ -293,6 +305,7 @@ HOST_SERVICES=ollama      # open the host gateway on port 11434
 HOST_SERVICES=host:1313   # or any one port on the gateway, for a dev server on the host
 HOST_SERVICES=name:443    # or one name the host routes to, on that port
 TOOLS="linear"            # tools granted from ~/.config/agent-sandbox/tools.d
+PORTS=("8130:3000")       # host loopback :8130 -> container :3000
 MOUNTS=(                  # extra host paths: "src:dest" per line
   # "/host/path:/container/path"
 )
