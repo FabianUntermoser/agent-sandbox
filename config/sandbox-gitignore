@@ -1,0 +1,10 @@
+# A sandbox commits as its operator, so the files git writes there carry the same author as the ones
+# the host writes. Installed to ~/.config/agent-sandbox/gitignore and read through GIT_CONFIG_GLOBAL.
+node_modules/
+.env
+.env.*
+*.log
+.DS_Store
+
+# The permission policy the launcher seeds into a project is the sandbox's own, never a commit.
+.pi/extensions/pi-permission-system/config.json

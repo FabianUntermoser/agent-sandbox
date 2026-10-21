@@ -37,5 +37,23 @@ if [ -d "$REPO_DIR/config/tools.d" ]; then
 fi
 # the permission policy a sandboxed pi starts with, copied into each project that has none.
 \cp "$REPO_DIR/config/pi-permission-policy.json" "$CONF_DIR/pi-permission-policy.json"
+\cp "$REPO_DIR/config/sandbox-gitignore" "$CONF_DIR/gitignore"
+
+# A sandbox commits, so git in there needs an identity and an excludes file. Both live in this one
+# generated file rather than in the operator's ~/.gitconfig, which carries a credential helper and
+# is mounted only with GIT_AUTH. sandbox.sh points GIT_CONFIG_GLOBAL at it, so a project's own
+# .git/config still wins where it sets one.
+git_name="$(git -C /tmp config user.name 2>/dev/null || true)"
+git_email="$(git -C /tmp config user.email 2>/dev/null || true)"
+if [ -n "$git_name" ] && [ -n "$git_email" ]; then
+	{
+		printf '[user]\n\tname = %s\n\temail = %s\n' "$git_name" "$git_email"
+		printf '[core]\n\texcludesFile = ~/.config/agent-sandbox/gitignore\n'
+	} >"$CONF_DIR/gitconfig"
+	info "git identity for sandboxes: $git_name <$git_email>"
+else
+	rm -f "$CONF_DIR/gitconfig"
+	info "no git identity on this host, so a sandbox commits with none"
+fi
 
 info "Done. Run 'sandbox.sh' in any project directory."

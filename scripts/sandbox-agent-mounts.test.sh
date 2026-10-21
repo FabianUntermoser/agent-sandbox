@@ -125,7 +125,9 @@ expect_says 'and the run says the grant is off' 'grant off (LOCAL_BIN)'
 mkdir -p "$home/repos/dots" \
 	"$home/.pi/agent/npm/node_modules/@gotgenes/pi-permission-system" \
 	"$home/.pi/agent/git/github.com/tmustier/pi-extensions" \
-	"$home/.pi/agent/extensions/pi-permission-system/logs"
+	"$home/.pi/agent/extensions/pi-permission-system/logs" \
+	"$home/.config/agent-sandbox"
+printf '[user]\n\tname = Fixture\n\temail = fixture@example.com\n' >"$home/.config/agent-sandbox/gitconfig"
 cp "$SRC/../config/base.conf" "$work/base.conf"
 run
 expect 'the catalogue hands over the permission extension read-only' yes \
@@ -140,6 +142,10 @@ expect 'the package tree the host pi loads is read-only' yes \
 	"$home/.pi/agent/npm:/home/node/.pi/agent/npm:ro" ok
 expect 'and so are the extension checkouts it loads' yes \
 	"$home/.pi/agent/git:/home/node/.pi/agent/git:ro" ok
+expect 'the generated git config is readable and read-only' yes \
+	"$home/.config/agent-sandbox:/home/node/.config/agent-sandbox:ro" ok
+expect 'and git is pointed at it rather than at the host .gitconfig' yes \
+	"GIT_CONFIG_GLOBAL=/home/node/.config/agent-sandbox/gitconfig" ok
 
 if [ "$failed" -eq 0 ]; then
 	printf 'sandbox-agent-mounts: ok\n'

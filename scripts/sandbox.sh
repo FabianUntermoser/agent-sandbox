@@ -1050,6 +1050,13 @@ elif [ -t 0 ]; then
 	TTY_FLAG="-it"
 fi
 
+# A sandbox commits as its operator. The generated config holds only the identity and the excludes
+# file, never a credential helper, so pointing git at it does not hand over a forge token the way
+# mounting the operator's own ~/.gitconfig would. A project's .git/config still wins over it.
+git_config="$HOME/.config/agent-sandbox/gitconfig"
+git_env=()
+[ -f "$git_config" ] && git_env+=(-e "GIT_CONFIG_GLOBAL=/home/$RUSER/.config/agent-sandbox/gitconfig")
+
 run=(docker run --rm $TTY_FLAG \
 	--name "$NAME" \
 	--label agent-sandbox.managed=true \
@@ -1059,6 +1066,7 @@ run=(docker run --rm $TTY_FLAG \
 	-e "COLORTERM=${COLORTERM:-truecolor}" \
 	-e DISABLE_AUTOUPDATER=1 \
 	-e DISABLE_TELEMETRY=1 \
+	"${git_env[@]}" \
 	-w "$WORK" \
 	"${mounts[@]}")
 run+=("${port_publish_args[@]}")
