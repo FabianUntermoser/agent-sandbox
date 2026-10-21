@@ -119,6 +119,23 @@ expect 'a follow root whose grant is off is not in force' no \
 	"$farm/pi/agent/models.json:/home/node/.pi/agent/models.json" ok
 expect_says 'and the run says the grant is off' 'grant off (LOCAL_BIN)'
 
+# The shipped catalogue, not a synthetic one: the permission extension is an explicit dependency
+# here, because mounting ~/.pi alone leaves its config a depth-4 link that never arrives. The host
+# policy is that link's target, so it must stay unmounted; a project brings its own policy.
+mkdir -p "$home/repos/dots" \
+	"$home/.pi/agent/npm/node_modules/@gotgenes/pi-permission-system" \
+	"$home/.pi/agent/extensions/pi-permission-system/logs"
+cp "$SRC/../config/base.conf" "$work/base.conf"
+run
+expect 'the catalogue hands over the permission extension read-only' yes \
+	"$home/.pi/agent/npm/node_modules/@gotgenes/pi-permission-system:/home/node/.pi/agent/npm/node_modules/@gotgenes/pi-permission-system:ro" ok
+expect 'and the host extension directory read-only' yes \
+	"$home/.pi/agent/extensions:/home/node/.pi/agent/extensions:ro" ok
+expect 'while the review log stays writable' yes \
+	"$home/.pi/agent/extensions/pi-permission-system/logs:/home/node/.pi/agent/extensions/pi-permission-system/logs" ok
+expect 'the host permission policy is not mounted' no \
+	"$home/.pi/agent/extensions/pi-permission-system/config.json:/home/node/.pi/agent/extensions/pi-permission-system/config.json:ro" ok
+
 if [ "$failed" -eq 0 ]; then
 	printf 'sandbox-agent-mounts: ok\n'
 else
