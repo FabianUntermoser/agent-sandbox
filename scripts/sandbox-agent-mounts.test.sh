@@ -124,6 +124,7 @@ expect_says 'and the run says the grant is off' 'grant off (LOCAL_BIN)'
 # policy is that link's target, so it must stay unmounted; a project brings its own policy.
 mkdir -p "$home/repos/dots" \
 	"$home/.pi/agent/npm/node_modules/@gotgenes/pi-permission-system" \
+	"$home/.pi/agent/git/github.com/tmustier/pi-extensions" \
 	"$home/.pi/agent/extensions/pi-permission-system/logs"
 cp "$SRC/../config/base.conf" "$work/base.conf"
 run
@@ -135,6 +136,10 @@ expect 'while the review log stays writable' yes \
 	"$home/.pi/agent/extensions/pi-permission-system/logs:/home/node/.pi/agent/extensions/pi-permission-system/logs" ok
 expect 'the host permission policy is not mounted' no \
 	"$home/.pi/agent/extensions/pi-permission-system/config.json:/home/node/.pi/agent/extensions/pi-permission-system/config.json:ro" ok
+expect 'the package tree the host pi loads is read-only' yes \
+	"$home/.pi/agent/npm:/home/node/.pi/agent/npm:ro" ok
+expect 'and so are the extension checkouts it loads' yes \
+	"$home/.pi/agent/git:/home/node/.pi/agent/git:ro" ok
 
 if [ "$failed" -eq 0 ]; then
 	printf 'sandbox-agent-mounts: ok\n'

@@ -111,6 +111,11 @@ RUN npm install -g playwright@${PLAYWRIGHT_VERSION} \
   && ln -sf /home/$USERNAME/.npm-global/bin/agent-browser /usr/local/bin/agent-browser \
   && ln -sf /home/$USERNAME/.npm-global/bin/playwright /usr/local/bin/playwright
 
+# The hypa CLI ships as a shim over the package tree the agent mounts, never over a host path: the
+# host shim execs an absolute path under the operator's home, which does not exist in here.
+RUN printf '#!/bin/sh\nexec /home/%s/.pi/agent/npm/node_modules/@hypabolic/hypa-linux-x64/bin/hypa "$@"\n' \
+  "$USERNAME" >/usr/local/bin/hypa && chmod 755 /usr/local/bin/hypa
+
 USER $USERNAME
 WORKDIR /workspace
 ENTRYPOINT ["/bin/bash", "-c", "exec \"$@\"", "bash"]
