@@ -35,5 +35,7 @@ if [ -d "$REPO_DIR/config/tools.d" ]; then
 		[ -f "$conf" ] && \cp "$conf" "$CONF_DIR/tools.d/"
 	done
 fi
+# the permission policy a sandboxed pi starts with, copied into each project that has none.
+\cp "$REPO_DIR/config/pi-permission-policy.json" "$CONF_DIR/pi-permission-policy.json"
 
 info "Done. Run 'sandbox.sh' in any project directory."

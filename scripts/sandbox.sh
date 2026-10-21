@@ -238,6 +238,26 @@ seed_pi_trust() {
 }
 seed_pi_trust "$@"
 
+# -- Pi permission policy ----------------------------------------------------
+
+# The host pi runs on yolo with a destructive-command list, and a sandboxed worker is the same pi:
+# Docker is the boundary here, so an unattended run that stops at a prompt is a broken run. The
+# project scope is the only one a sandbox can supply, because the host policy is a link the
+# container never resolves, so the policy is copied in from the installed catalogue. A project
+# that already carries one keeps its own, which is how a repository narrows itself.
+seed_pi_permission_policy() {
+	[ "$SESSION" = pi ] || return 0
+	local src="${PI_POLICY:-$HOME/.config/agent-sandbox/pi-permission-policy.json}"
+	local dest="$WORK/.pi/extensions/pi-permission-system/config.json"
+	[ -f "$src" ] || return 0
+	[ -e "$dest" ] && return 0
+	mkdir -p "${dest%/*}" || return 0
+	cp "$src" "$dest" || return 0
+	chmod 644 "$dest" 2>/dev/null || true
+	echo "pi: sandbox permission policy at ${dest#"$WORK"/}" >&2
+}
+seed_pi_permission_policy
+
 # Load the manifest. The project's own may be absent; one the caller named must be readable, since
 # a run that quietly loses the grants it was asked for is worse than one that stops here.
 manifest_path="$WORK/$MANIFEST"

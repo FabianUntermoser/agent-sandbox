@@ -210,7 +210,6 @@ HOSTS=api.linear.app:443
 
 A tool that needs a system package or a daemon is the exception: that is an image layer plus a
 service grant, and it is documented in the tool's own file.
-
 ## Permissions inside the sandbox
 
 Docker is the security boundary, so the agent inside does not stop for approval. `make setup` also

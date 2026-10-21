@@ -10,6 +10,7 @@ check:
 	./scripts/sandbox-name.test.sh
 	./scripts/sandbox-git-fence.test.sh
 	./scripts/sandbox-firewall.test.sh
+	./scripts/sandbox-permission-policy.test.sh
 
 # Real container: the browser is what it proves, so it needs docker and the image.
 browser-check:
