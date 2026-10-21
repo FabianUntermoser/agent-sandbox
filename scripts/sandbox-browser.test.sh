@@ -3,9 +3,8 @@
 # USAGE: browser QA in the shipped image: render a served fixture, click it, shoot it
 #
 # Runs a real container from the image and needs no network: the fixture is served inside the
-# container from a read-only mount. Playwright is the gate. agent-browser is reported, never
-# silently: a launch it cannot make prints GAP and does not fail this suite, because the issue
-# that tracks it is open and a green run here must not read as settled.
+# container from a read-only mount. Both Playwright and agent-browser must launch, render,
+# interact with the fixture, and write a screenshot for this check to pass.
 
 set -euo pipefail
 
@@ -15,10 +14,13 @@ IMAGE="${IMAGE:-agent-sandbox}"
 failed=0
 ok() { printf '  ok    %s\n' "$1"; }
 nok() { printf '  FAIL  %s\n' "$1" >&2; failed=1; }
-gap() { printf '  GAP   %s\n' "$1"; }
 
 T="$(mktemp -d)"
 trap 'rm -rf "$T"' EXIT
+SHOTS="${SHOTS:-$(mktemp -d /tmp/sandbox-browser.XXXXXX)}"
+mkdir -p "$SHOTS"
+# The container user is uid 1000, which need not be the invoking user.
+chmod 777 "$SHOTS"
 
 cat >"$T/index.html" <<'EOF'
 <!doctype html>
@@ -36,7 +38,7 @@ chmod 755 "$T"
 chmod 644 "$T/index.html"
 
 in_image() { # <script>: run it inside a fresh container of the image
-	docker run --rm --shm-size=1g -v "$T:/fixture:ro" --entrypoint /bin/bash "$IMAGE" -c "$1"
+	docker run --rm -v "$T:/fixture:ro" -v "$SHOTS:/shots" --entrypoint /bin/bash "$IMAGE" -c "$1"
 }
 
 read -r -d '' PROBE <<'PROBE' || true
@@ -69,8 +71,8 @@ const fs = require("fs");
   console.log("content=" + (await page.textContent("#title")));
   await page.click("#go");
   console.log("after-click=" + (await page.textContent("#title")));
-  await page.screenshot({ path: "/tmp/shot.png" });
-  console.log("screenshot=" + fs.statSync("/tmp/shot.png").size);
+  await page.screenshot({ path: "/shots/playwright.png" });
+  console.log("screenshot=" + fs.statSync("/shots/playwright.png").size);
   console.log("page-errors=" + errors.length + (errors.length ? " " + errors.join("; ").slice(0, 160) : ""));
   await browser.close();
 })().catch((e) => { console.log("playwright-error=" + String(e).slice(0, 200)); process.exit(1); });
@@ -95,13 +97,51 @@ else
 	[ "$(field page-errors)" = "0" ] && ok "no page errors" || nok "page errors: $(field page-errors)"
 fi
 
-# agent-browser: reported, not gated.
-ab="$(in_image 'cd /tmp && agent-browser open "data:text/html,<h1>ab</h1>" >/tmp/ab.log 2>&1; agent-browser get text h1 2>/dev/null | tail -1; agent-browser close >/dev/null 2>&1' 2>&1 | tail -1 || true)"
-if [ "$ab" = "ab" ]; then
-	ok "agent-browser launches a browser"
-else
-	gap "agent-browser cannot launch a browser in this container, tracked on its issue"
+# agent-browser: a failed launch or interaction is a test failure, not a report-only gap.
+read -r -d '' AB_PROBE <<'ABPROBE' || true
+set -euo pipefail
+python3 -m http.server 8123 --directory /fixture >/tmp/agent-browser-http.log 2>&1 &
+server=$!
+cleanup() {
+  agent-browser close >/dev/null 2>&1 || true
+  kill "$server" 2>/dev/null || true
+  wait "$server" 2>/dev/null || true
+}
+trap cleanup EXIT
+ready=no
+for _ in $(seq 1 40); do
+  if curl -fsS -o /dev/null http://127.0.0.1:8123/ 2>/dev/null; then ready=yes; break; fi
+  sleep 0.25
+done
+if [ "$ready" != yes ]; then
+  cat /tmp/agent-browser-http.log >&2 || true
+  echo "agent-browser-fixture-server=not-ready"
+  exit 1
 fi
+printf 'versions=%s | %s\n' "$(agent-browser --version)" "$("$AGENT_BROWSER_EXECUTABLE_PATH" --version 2>/dev/null || echo headless_shell)"
+agent-browser open http://127.0.0.1:8123/
+before="$(agent-browser get text '#title')"
+printf 'agent-browser-content=%s\n' "$before"
+[ "$before" = fixture ]
+agent-browser click '#go'
+after="$(agent-browser get text '#title')"
+printf 'agent-browser-after-click=%s\n' "$after"
+[ "$after" = clicked ]
+agent-browser screenshot /shots/agent-browser.png
+bytes="$(stat -c%s /shots/agent-browser.png)"
+printf 'agent-browser-screenshot=%s\n' "$bytes"
+[ "$bytes" -gt 5000 ]
+ABPROBE
+
+printf '  agent-browser smoke test\n'
+if ab_out="$(in_image "$AB_PROBE" 2>&1)"; then
+	ok "agent-browser launches, reads and interacts with the fixture, and writes a screenshot"
+	printf '%s\n' "$ab_out" | grep -E '^(versions|agent-browser-)' | sed 's/^/        /'
+else
+	nok "agent-browser smoke test failed"
+	printf '%s\n' "$ab_out" | sed 's/^/  | /' >&2
+fi
+printf '  screenshots: %s\n' "$SHOTS"
 
 if [ "$failed" -ne 0 ]; then
 	echo "  --- container output ---" >&2

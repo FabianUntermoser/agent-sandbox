@@ -15,17 +15,18 @@ symlinks are not followed, and a target in the vault, `~/.ssh` or `~/.gnupg` is 
 reported.
 - Shell, aliasrc, Claude settings and the CLIs (ollama, glab, ant, acli) are in the image, not
   mounted from the host.
-- Browser QA is in the image: Playwright with its pinned Chromium and every shared library it
-  needs, reachable as `chromium` and `chromium-browser`, so no sandbox needs an egress grant to
-  download a browser. `agent-browser` ships alongside it, pointed at the same binary through
-  `AGENT_BROWSER_EXECUTABLE_PATH`. `make browser-check` renders a served fixture, clicks it and
-  screenshots it in the shipped image, which is the gate.
-- The last verified image used Node 22 and `agent-browser` 0.39.1 failed before DevTools with
-  `chrome_crashpad_handler: --database is required` / `Chrome exited before providing DevTools URL`.
-  That package requires Node 24 or later, so the image is now pinned to the existing Node 24 base
-  used by `gpt-plugin`. This branch has not yet rebuilt the image or rerun `make browser-check`, so
-  whether the version alignment fixes the launcher remains unverified. Playwright was the working
-  browser-QA path in the prior image; keep its fixture check as the gate.
+- Browser QA is installed in the image: Playwright's pinned Chromium and its required shared
+  libraries, including the matching headless_shell, are baked in, so no sandbox needs an
+  egress grant to download a browser. Playwright's direct test uses the full Chromium build;
+  agent-browser uses /usr/local/bin/chromium-headless-shell via
+  AGENT_BROWSER_EXECUTABLE_PATH and launches it with
+  AGENT_BROWSER_ARGS=--no-sandbox,--disable-dev-shm-usage.
+- The full Chromium executable crashed when launched by agent-browser with
+  chrome_crashpad_handler: --database is required / Chrome exited before providing DevTools URL;
+  adding --no-sandbox alone did not resolve it. Pointing agent-browser at Playwright's
+  matching headless_shell launches it. make browser-check gates both Playwright and
+  agent-browser on rendering the served fixture, reading and changing its text, and writing a
+  screenshot, with the default /dev/shm a sandbox gets; it prints the screenshot directory.
 - Every sandbox runs on its own network, with egress denied by default. [Egress](#egress) covers
   the allowlist, the host services and the ways out of it.
 - `config/base.conf` is the catalogue of what a sandbox may inherit, and `BASE=full` grants the
