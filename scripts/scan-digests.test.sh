@@ -16,6 +16,13 @@ stub="$(mktemp -d)"
 hex=$(printf 'a%.0s' {1..64})
 zhex=$(printf 'z%.0s' {1..64})
 trap 'rm -rf "$work" "$stub"' EXIT
+mkdir -p "$stub/security"
+cp "$SRC/../security/scan-digests.sh" "$stub/security/scan-digests.sh"
+cat >"$stub/security/scan.sh" <<EOF
+printf '%s\n' "\$1" >>"$work/scanned"
+mkdir -p "\$2"
+EOF
+chmod +x "$stub/security/scan.sh"
 
 cat >"$stub/docker" <<EOF
 #!/usr/bin/env bash
@@ -29,9 +36,9 @@ chmod +x "$stub/docker"
 # run <line>...: writes those lines as the Dockerfile and runs the parse over it
 run() {
 	printf '%s\n' "$@" >"$work/Dockerfile"
-	rm -f "$work/pulled"
+	rm -f "$work/pulled" "$work/scanned"
 	set +e
-	out=$(cd "$work" && PATH="$stub:$PATH" "$SRC/../security/scan-digests.sh" "$work/out" "$work/Dockerfile" 2>&1)
+	out=$(cd "$work" && PATH="$stub:$PATH" "$stub/security/scan-digests.sh" "$work/out" "$work/Dockerfile" 2>&1)
 	status=$?
 	set -e
 	# no pull at all is the expected shape of a failed run, so the file may not exist
@@ -40,15 +47,20 @@ run() {
 		pulled=$(sort -u "$work/pulled" | tr '\n' ' ')
 		pulled=${pulled% }
 	fi
+	scanned=""
+	if [ -f "$work/scanned" ]; then
+		scanned=$(sort -u "$work/scanned" | tr '\n' ' ')
+		scanned=${scanned% }
+	fi
 }
 
 expect() { # <label> <want-pulled> <want-status: ok|fail>
 	local label=$1 want=$2 want_status=$3 got_status=ok
 	[ "$status" -eq 0 ] || got_status=fail
-	if [ "$pulled" = "$want" ] && [ "$got_status" = "$want_status" ]; then
+	if [ "$pulled" = "$want" ] && [ "$scanned" = "$want" ] && [ "$got_status" = "$want_status" ]; then
 		printf '  ok    %s\n' "$label"
 	else
-		printf '  FAIL  %s: wanted %s/%s, got %s/%s\n' "$label" "$want" "$want_status" "$pulled" "$got_status" >&2
+		printf '  FAIL  %s: wanted pull/scan %s/%s, got %s/%s (%s)\n' "$label" "$want" "$want" "$pulled" "$scanned" "$got_status" >&2
 		printf '        status %s, last lines:\n' "$status" >&2
 		tail -4 <<<"$out" | sed 's/^/        /' >&2
 		failed=1
@@ -70,6 +82,12 @@ expect 'a tab after the instruction is read' "alpine@sha256:$hex node:22@sha256:
 
 run "FROM node:22@sha256:$hex As build" "FROM build"
 expect 'a mixed case alias is read, and its stage reused' "node:22@sha256:$hex" ok
+
+run "FROM alpine AS alpine"
+expect 'a self-named unpinned external image cannot masquerade as an earlier stage' '' fail
+
+run "FROM alpine@sha256:$hex AS alpine" "FROM alpine"
+expect 'a pinned external base is scanned before its same-named stage alias is reused' "alpine@sha256:$hex" ok
 
 run "FROM node:22@sha256:$hex  AS  build"
 expect 'white space around AS does not reach the reference' "node:22@sha256:$hex" ok

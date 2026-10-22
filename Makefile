@@ -10,6 +10,7 @@ check:
 	./scripts/sandbox-git-fence.test.sh
 	./scripts/sandbox-firewall.test.sh
 	./scripts/scan-digests.test.sh
+	./scripts/gate.test.sh
 
 # Real containers: the mounts are what they prove, so they need docker and the image.
 worktree-check:
