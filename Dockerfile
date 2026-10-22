@@ -22,7 +22,7 @@ apt-get install -y --no-install-recommends \
   less git procps sudo fzf zsh man-db unzip gnupg2 \
   ripgrep fd-find jq nano vim ffmpeg tmux \
   python3 python3-pip python3-venv pipx \
-  iptables ipset iproute2 dnsutils ca-certificates curl \
+  iptables ipset iproute2 dnsutils ca-certificates curl util-linux \
   bubblewrap gh zstd rofi xdg-utils
 ln -s "$(command -v fdfind)" /usr/local/bin/fd
 rm -rf /var/lib/apt/lists/*
@@ -73,13 +73,12 @@ RUN chown -R $USERNAME:$USERNAME /home/$USERNAME/.claude
 RUN install -d -o $USERNAME -g $USERNAME /home/$USERNAME/.local/bin
 
 COPY scripts/init-firewall.sh /usr/local/bin/init-firewall.sh
+COPY scripts/sandbox-entrypoint.sh /usr/local/bin/sandbox-entrypoint.sh
 COPY scripts/generate-allowlist.sh /tmp/generate-allowlist.sh
 COPY scripts/public-ip.sh /usr/local/lib/public-ip.sh
-RUN chmod +x /usr/local/bin/init-firewall.sh /tmp/generate-allowlist.sh \
+RUN chmod 0755 /usr/local/bin/init-firewall.sh /usr/local/bin/sandbox-entrypoint.sh /tmp/generate-allowlist.sh \
   && DOMAINS_FILE=/etc/allowlist-domains /tmp/generate-allowlist.sh > /etc/allowlist.sh \
-  && rm /tmp/generate-allowlist.sh \
-  && echo "$USERNAME ALL=(root) NOPASSWD: /usr/local/bin/init-firewall.sh" > /etc/sudoers.d/init-firewall \
-  && chmod 0440 /etc/sudoers.d/init-firewall
+  && rm /tmp/generate-allowlist.sh
 
 # claude: @anthropic-ai/claude-code
 # pi:     @earendil-works/pi-coding-agent
@@ -87,8 +86,7 @@ RUN chmod +x /usr/local/bin/init-firewall.sh /tmp/generate-allowlist.sh \
 ENV PATH=/home/$USERNAME/.local/bin:/home/$USERNAME/.local/pipx/bin:/home/$USERNAME/.npm-global/bin:$PATH \
     PIPX_BIN_DIR=/home/$USERNAME/.local/pipx/bin \
     NPM_CONFIG_PREFIX=/home/$USERNAME/.npm-global \
-    AGENT_BROWSER_EXECUTABLE_PATH=/usr/local/bin/chromium-headless-shell \
-    AGENT_BROWSER_ARGS=--no-sandbox,--disable-dev-shm-usage
+    AGENT_BROWSER_EXECUTABLE_PATH=/usr/local/bin/chromium-headless-shell
 
 RUN pipx install whisper-ctranslate2
 RUN npm install -g @anthropic-ai/claude-code @earendil-works/pi-coding-agent @openai/codex agent-browser@0.39.1

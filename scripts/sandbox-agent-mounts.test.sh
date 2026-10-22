@@ -17,7 +17,11 @@ trap 'rm -rf "$work" "$stub"' EXIT
 
 home="$work/home"
 farm="$work/farm"
-mkdir -p "$home/.pi/agent/skills" "$farm/pi/agent/skills/first" "$farm/pi/agent/extensions" "$home/notes" "$home/.config/gh"
+mkdir -p "$home/.pi/agent/skills" "$farm/pi/agent/skills/first" "$farm/pi/agent/extensions" "$home/notes" "$home/.config/gh" \
+  "$farm/.agents/skills" "$farm/.agents-source/skills/review"
+: >"$farm/.agents-source/skills/review/SKILL.md"
+ln -s "$farm/.agents-source/skills/review" "$farm/.agents/skills/review"
+ln -s "$farm/.agents" "$home/.agents"
 
 # the checkout the links point at: the two files pi cannot start without, a skills directory that
 # only the link names, and a package file no link reaches
@@ -83,7 +87,7 @@ expect_says() { # <label> <substring>
 	fi
 }
 
-baseconf "follow $farm    grant=AGENTS" 'dir   ~/.pi'
+baseconf "follow $farm    grant=AGENTS" 'dir   ~/.pi ro grant=AGENTS' 'dir   ~/.agents ro grant=AGENTS'
 run
 
 expect 'a linked file arrives at the guest path the link occupies' yes \
@@ -93,7 +97,11 @@ expect 'and so does the second one' yes \
 expect 'a linked directory does too' yes \
 	"$farm/pi/agent/skills/first:/home/node/.pi/agent/skills/first:ro" ok
 expect 'the directory itself is still mounted, so its own files arrive' yes \
-	"$home/.pi:/home/node/.pi" ok
+	"$home/.pi:/home/node/.pi:ro" ok
+expect 'a root-level .agents symlink is mounted at its logical guest path' yes \
+	"$farm/.agents:/home/node/.agents:ro" ok
+expect 'skill links below a root-level .agents symlink are traversed and keep the logical destination' yes \
+	"$farm/.agents-source/skills/review:/home/node/.agents/skills/review:ro" ok
 
 expect 'the checkout is not mounted at its own path' no \
 	"$farm/pi/agent/models.json:$farm/pi/agent/models.json" ok
@@ -107,13 +115,15 @@ expect 'a link outside every follow root is not mounted' no \
 	"$home/.config/gh/hosts.yml:/home/node/.pi/agent/forge" ok
 expect_says 'and the run says why it was left out' 'link not followed (outside every follow root): agent/forge'
 
-baseconf 'dir   ~/.pi'
+baseconf 'dir   ~/.pi ro grant=AGENTS' 'dir   ~/.agents ro grant=AGENTS'
 run
 expect 'with no follow root declared, no link under the directory is followed' no \
 	"$farm/pi/agent/models.json:/home/node/.pi/agent/models.json" ok
 expect_says 'and the run says the catalogue declares none' 'declares no follow root'
+expect 'without a follow root, a root-level .agents symlink does not carry its target skill' no \
+	"$farm/.agents-source/skills/review:/home/node/.agents/skills/review:ro" ok
 
-baseconf "follow $farm    grant=LOCAL_BIN" 'dir   ~/.pi'
+baseconf "follow $farm    grant=LOCAL_BIN" 'dir   ~/.pi ro grant=AGENTS'
 run
 expect 'a follow root whose grant is off is not in force' no \
 	"$farm/pi/agent/models.json:/home/node/.pi/agent/models.json" ok
@@ -122,14 +132,27 @@ expect_says 'and the run says the grant is off' 'grant off (LOCAL_BIN)'
 # The shipped catalogue, not a synthetic one: the permission extension is an explicit dependency
 # here, because mounting ~/.pi alone leaves its config a depth-4 link that never arrives. The host
 # policy is that link's target, so it must stay unmounted; a project brings its own policy.
-mkdir -p "$home/repos/dots" \
+mkdir -p "$home/repos/dots/.agents/skills" "$home/repos/dots/.agents-source/skills/review" \
 	"$home/.pi/agent/npm/node_modules/@gotgenes/pi-permission-system" \
 	"$home/.pi/agent/git/github.com/tmustier/pi-extensions" \
 	"$home/.pi/agent/extensions/pi-permission-system/logs" \
-	"$home/.config/agent-sandbox"
+	"$home/.config/agent-sandbox" \
+	"$home/.agent-secrets"
 printf '[user]\n\tname = Fixture\n\temail = fixture@example.com\n' >"$home/.config/agent-sandbox/gitconfig"
+printf 'fixture skill\n' >"$home/repos/dots/.agents-source/skills/review/SKILL.md"
+printf 'FAKE_LINEAR_KEY=not-a-real-token\n' >"$home/.agent-secrets/linear-app.env"
+ln -s "$home/repos/dots/.agents-source/skills/review" "$home/repos/dots/.agents/skills/review"
+rm "$home/.agents"
+ln -s "$home/repos/dots/.agents" "$home/.agents"
 cp "$SRC/../config/base.conf" "$work/base.conf"
 run
+expect 'the host Pi config root is read-only' yes \
+	"$home/.pi:/home/node/.pi:ro" ok
+expect 'the root-level .agents tree is read-only' yes \
+	"$home/repos/dots/.agents:/home/node/.agents:ro" ok
+expect 'Linear credentials are absent unless the grant is opted in' no \
+	"$home/.agent-secrets/linear-app.env:/home/node/.agent-secrets/linear-app.env:ro" ok
+expect_says 'the Linear grant default is off' 'grant off (LINEAR)'
 expect 'the catalogue hands over the permission extension read-only' yes \
 	"$home/.pi/agent/npm/node_modules/@gotgenes/pi-permission-system:/home/node/.pi/agent/npm/node_modules/@gotgenes/pi-permission-system:ro" ok
 expect 'and the host extension directory read-only' yes \
@@ -140,12 +163,27 @@ expect 'the host permission policy is not mounted' no \
 	"$home/.pi/agent/extensions/pi-permission-system/config.json:/home/node/.pi/agent/extensions/pi-permission-system/config.json:ro" ok
 expect 'the package tree the host pi loads is read-only' yes \
 	"$home/.pi/agent/npm:/home/node/.pi/agent/npm:ro" ok
+expect 'the shipped catalogue also follows a root-level .agents symlink' yes \
+	"$home/repos/dots/.agents-source/skills/review:/home/node/.agents/skills/review:ro" ok
 expect 'and so are the extension checkouts it loads' yes \
 	"$home/.pi/agent/git:/home/node/.pi/agent/git:ro" ok
 expect 'the generated git config is readable and read-only' yes \
 	"$home/.config/agent-sandbox:/home/node/.config/agent-sandbox:ro" ok
 expect 'and git is pointed at it rather than at the host .gitconfig' yes \
 	"GIT_CONFIG_GLOBAL=/home/node/.config/agent-sandbox/gitconfig" ok
+
+printf 'AGENTS="pi"\nLINEAR=true\n' >"$work/.sandbox.conf"
+rm -f "$work/args"
+set +e
+out=$(cd "$work" && HOME="$home" BASE_CONF="$work/base.conf" PATH="$stub:$PATH" \
+	"$SRC/sandbox.sh" --stdio --new true 2>&1)
+status=$?
+set -e
+printf '%s\n' "$out" >"$work/out"
+expect 'explicit LINEAR opt-in mounts only the individual env file read-only' yes \
+	"$home/.agent-secrets/linear-app.env:/home/node/.agent-secrets/linear-app.env:ro" ok
+expect 'the secret directory itself is not mounted' no \
+	"$home/.agent-secrets:/home/node/.agent-secrets" ok
 
 if [ "$failed" -eq 0 ]; then
 	printf 'sandbox-agent-mounts: ok\n'

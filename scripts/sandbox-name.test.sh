@@ -35,7 +35,7 @@ case "\$1" in
 		;;
 	container)
 		printf '%s\n' "\$@" >"$inspect_args"
-		printf '%s\n' 'name:       /sandbox-cli-test' 'status:     running' 'image:      agent-sandbox' 'project:    /tmp/project' 'manifest:   /tmp/project/.sandbox.conf' 'network:    agent-sandbox-net' 'published:  {"3000/tcp":[{"HostIp":"127.0.0.1","HostPort":"8130"}]}' 'cap-add:    ["NET_ADMIN","NET_RAW"]' 'cap-drop:   null' 'mounts:' '  /tmp/project -> /tmp/project (rw)'
+		printf '%s\n' 'name:       /sandbox-cli-test' 'status:     running' 'image:      agent-sandbox' 'project:    /tmp/project' 'manifest:   /tmp/project/.sandbox.conf' 'network:    agent-sandbox-net' 'published:  {"3000/tcp":[{"HostIp":"127.0.0.1","HostPort":"8130"}]}' 'cap-add:    ["NET_ADMIN"]' 'cap-drop:   ["NET_RAW"]' 'mounts:' '  /tmp/project -> /tmp/project (rw)'
 		;;
 esac
 exit 0
@@ -69,6 +69,13 @@ project="$(basename "$work")"
 printf '  no flag\n'
 run || true
 expect yes "$(got "sandbox-$project")" "the container is named after the project"
+expect yes "$(got '--user=0:0')" 'firewall bootstrap runs as root only at startup'
+expect yes "$(got '/usr/local/bin/sandbox-entrypoint.sh')" 'the dedicated entrypoint owns bootstrap and capability drop'
+expect yes "$(got '--cap-add=NET_ADMIN')" 'NET_ADMIN is granted only for firewall bootstrap'
+expect no "$(got '--cap-add=NET_RAW')" 'NET_RAW is never granted to the bootstrap container'
+expect yes "$(got '--cap-drop=NET_RAW')" 'NET_RAW is removed from Docker capability defaults'
+expect yes "$(got '--')" 'the agent command is separated from trusted service grants'
+expect no "$(got '/bin/bash')" 'the launcher no longer runs an agent shell as the privileged bootstrap command'
 
 printf '  --name\n'
 run --name probe-one || true
@@ -94,6 +101,19 @@ else
 fi
 
 
+
+printf '  host network mode still isolates Pi and drops privileges\n'
+host_manifest="$work/host-network.conf"
+printf 'MOUNTS=()\nNETWORK=host\n' >"$host_manifest"
+run --manifest "$host_manifest" || true
+expect yes "$(got '--network=host')" 'host mode keeps the explicit network selection'
+expect yes "$(got '--entrypoint')" 'host mode uses the security entrypoint'
+expect yes "$(got 'SANDBOX_SKIP_FIREWALL=1')" 'host mode skips unsupported firewall bootstrap'
+expect yes "$(got '/usr/local/bin/sandbox-entrypoint.sh')" 'host mode still uses the privilege-dropping entrypoint'
+expect yes "$(got '--cap-drop=NET_RAW')" 'host mode also drops NET_RAW'
+expect no "$(got '--cap-add=NET_ADMIN')" 'host mode receives no NET_ADMIN'
+expect no "$(got '--cap-add=NET_RAW')" 'host mode receives no NET_RAW'
+expect yes "$(got 'PI_CODING_AGENT_DIR=/tmp/agent-sandbox-pi-agent-sandbox-'$project)" 'host mode gets a stable per-container Pi state path'
 
 printf '  no arguments shows help rather than launching a shell\n'
 if (cd "$work" && PATH="$stub:$PATH" "$SRC/sandbox.sh") >"$work/out" 2>&1 &&

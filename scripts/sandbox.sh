@@ -220,43 +220,9 @@ fi
 
 # -- Pi project trust --------------------------------------------------------
 
-# pi asks for project trust the first time it runs in a directory that holds
-# project resources. The sandbox mounts the project at its own path, so writing
-# that path into the trust store here means the container inherits the decision
-# instead of stopping at the prompt.
-seed_pi_trust() {
-	[ "$SESSION" = pi ] || return 0
-	case " ${*:-} " in *" -na "*|*" --no-approve "*) return 0 ;; esac
-	local store="${PI_TRUST_FILE:-$HOME/.pi/agent/trust.json}"
-	command -v jq >/dev/null 2>&1 || return 0
-	[ "$(jq -r --arg w "$WORK" '.[$w] // empty' "$store" 2>/dev/null)" = true ] && return 0
-	mkdir -p "${store%/*}"
-	[ -f "$store" ] || echo '{}' >"$store"
-	jq --arg w "$WORK" '. + {($w): true}' "$store" >"$store.tmp" || { rm -f "$store.tmp"; return 0; }
-	mv "$store.tmp" "$store"
-	echo "pi: trusted '$WORK', project resources may load" >&2
-}
-seed_pi_trust "$@"
-
-# -- Pi permission policy ----------------------------------------------------
-
-# The host pi runs on yolo with a destructive-command list, and a sandboxed worker is the same pi:
-# Docker is the boundary here, so an unattended run that stops at a prompt is a broken run. The
-# project scope is the only one a sandbox can supply, because the host policy is a link the
-# container never resolves, so the policy is copied in from the installed catalogue. A project
-# that already carries one keeps its own, which is how a repository narrows itself.
-seed_pi_permission_policy() {
-	[ "$SESSION" = pi ] || return 0
-	local src="${PI_POLICY:-$HOME/.config/agent-sandbox/pi-permission-policy.json}"
-	local dest="$WORK/.pi/extensions/pi-permission-system/config.json"
-	[ -f "$src" ] || return 0
-	[ -e "$dest" ] && return 0
-	mkdir -p "${dest%/*}" || return 0
-	cp "$src" "$dest" || return 0
-	chmod 644 "$dest" 2>/dev/null || true
-	echo "pi: sandbox permission policy at ${dest#"$WORK"/}" >&2
-}
-seed_pi_permission_policy
+# Project trust and the unattended policy are staged by the container entrypoint into the
+# disposable per-container Pi agent directory. Never write trust or policy to the persistent
+# host/project tree from this launcher.
 
 # Load the manifest. The project's own may be absent; one the caller named must be readable, since
 # a run that quietly loses the grants it was asked for is worse than one that stops here.
@@ -635,19 +601,28 @@ while read -r kind path opts; do
 	# What links deeper is runtime state, codex's arg0 shims sit at depth 5, and it stays out.
 	if [ -n "$agent" ] && [ "$kind" = dir ]; then
 		[ "${#follow_roots[@]}" -gt 0 ] || echo -e "  \e[33m${BASE_CONF} declares no follow root, so no link under an agent directory is followed.\e[0m" >&2
+		# An agent directory may itself be a link into the checkout, and `find` does not descend into
+		# a path that is a link: the whole tree then reads as "no links", which is how 58 authored
+		# skills stayed dangling while their names still listed. The walk starts at the resolved
+		# directory; the destination is rebuilt from this catalogue entry, never from the physical
+		# path, so each link keeps the guest path it already occupies.
+		walk=$(readlink -f "$path" 2>/dev/null || true)
+		[ -n "$walk" ] && [ -d "$walk" ] || walk=$path
+		prefix="/home/$RUSER/${path#"$HOME"/}"
 		while IFS= read -r -d '' link; do
+			rel=${link#"$walk"/}
 			target=$(readlink -f "$link") || continue
 			[ -n "$target" ] && [ -e "$target" ] || continue
 			if denied "$target"; then
-				echo "  link not followed (the vault, or a key): ${link#"$path"/} -> $target" >&2
+				echo "  link not followed (the vault, or a key): $rel -> $target" >&2
 				continue
 			fi
 			if ! inside_follow_root "$target"; then
-				echo "  link not followed (outside every follow root): ${link#"$path"/} -> $target" >&2
+				echo "  link not followed (outside every follow root): $rel -> $target" >&2
 				continue
 			fi
-			add_mount "$target" "/home/$RUSER/${link#"$HOME"/}" ro
-		done < <(find "$path" -maxdepth 3 -type l -print0 2>/dev/null)
+			add_mount "$target" "$prefix/$rel" ro
+		done < <(find "$walk" -maxdepth 3 -type l -print0 2>/dev/null)
 	fi
 done <"$BASE_CONF"
 
@@ -1070,6 +1045,9 @@ run=(docker run --rm $TTY_FLAG \
 	-w "$WORK" \
 	"${mounts[@]}")
 run+=("${port_publish_args[@]}")
+# Docker-configured path also reaches later docker exec processes in the same container.
+run+=(-e "PI_CODING_AGENT_DIR=/tmp/agent-sandbox-pi-agent-$NAME")
+run+=(-e "SANDBOX_SESSION=$SESSION")
 
 case "$NETWORK" in
 host)
@@ -1078,6 +1056,10 @@ host)
 		echo -e "  \e[33mNETWORK=host skips the firewall, so a tool's egress grant is not enforced.\e[0m" >&2
 	fi
 	exec "${run[@]}" --network=host "$IMAGE" "$@"
+	# Keep Pi state isolated and drop to node even in host-network mode. This mode skips
+	# firewall setup and receives no extra capabilities.
+	run+=(--network=host --user=0:0 --cap-drop=NET_RAW -e SANDBOX_SKIP_FIREWALL=1 --entrypoint /usr/local/bin/sandbox-entrypoint.sh)
+	exec "${run[@]}" "$IMAGE" -- "$@"
 	;;
 bridge | offline | "")
 	# One dedicated network for every sandbox: the default bridge is shared with
@@ -1120,11 +1102,14 @@ bridge | offline | "")
 		for grant in "${tool_host_grants[@]}"; do printf '%s\n' "$grant"; done
 		for port in "${published_container_ports[@]}"; do printf 'published:%s\n' "$port"; done
 	} >"$services"
-	fixed_services=$(
-		{ printf '%s\n' $HOST_SERVICES | grep -v ':' || true
-		  printf '%s\n' $HOST_SERVICES | grep -E '^host:[0-9]+$' || true
-		} | tr '\n' ' '
-	)
+	fixed_service_args=()
+	for service in $HOST_SERVICES; do
+		case "$service" in
+		*:) die "invalid empty host service: $service" ;;
+		*:* ) ;; # name:port and host:port are supplied only through the grant file
+		*) fixed_service_args+=("$service") ;;
+		esac
+	done
 	run+=(-v "$services:/etc/agent-sandbox-host-services:ro")
 	if [ -n "$HOST_SERVICES" ]; then
 		run+=(--add-host=host.docker.internal:host-gateway)
@@ -1135,10 +1120,11 @@ bridge | offline | "")
 		esac
 	fi
 	exec "${run[@]}" \
-		--cap-add=NET_ADMIN --cap-add=NET_RAW \
-		--entrypoint /bin/bash \
+		--user=0:0 \
+		--cap-add=NET_ADMIN --cap-drop=NET_RAW \
+		--entrypoint /usr/local/bin/sandbox-entrypoint.sh \
 		"$IMAGE" \
-		-c "sudo /usr/local/bin/init-firewall.sh $fixed_services && exec \"\$@\"" bash "$@"
+		"${fixed_service_args[@]}" -- "$@"
 	;;
 *)
 	die "unknown NETWORK '$NETWORK' (bridge or host)"

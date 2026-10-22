@@ -18,6 +18,7 @@ trap 'rm -rf "$work" "$stub"' EXIT
 home="$work/home"
 proj="$work/proj"
 dest="$proj/.pi/extensions/pi-permission-system/config.json"
+trust="$home/.pi/agent/trust.json"
 mkdir -p "$home/.config/agent-sandbox" "$proj"
 cp "$SRC/../config/base.conf" "$home/.config/agent-sandbox/base.conf"
 cp "$SRC/../config/pi-permission-policy.json" "$home/.config/agent-sandbox/pi-permission-policy.json"
@@ -47,32 +48,44 @@ run() { # <session>: runs the launcher with a stubbed docker
 	(cd "$proj" && HOME="$home" PATH="$stub:$PATH" "$SRC/sandbox.sh" "$1" true >/dev/null 2>&1) || true
 }
 
-jq_policy() { jq -r "$1" "$dest" 2>/dev/null; }
+jq_policy() { jq -r "$1" "$SRC/../config/pi-permission-policy.json" 2>/dev/null; }
 
 ## CASES
 
-run pi
-expect 'a pi run seeds the project policy' yes test -f "$dest"
-expect 'the policy is the installed one' yes cmp -s "$dest" "$SRC/../config/pi-permission-policy.json"
-expect 'and it turns yolo on' yes test "$(jq_policy .yoloMode)" = true
-expect 'with a universal allow as the floor' yes test "$(jq_policy '.permission["*"]')" = allow
-expect 'and destructive commands still stop to ask' yes \
-	test "$(jq_policy '.permission.bash["*rm -rf*"]')" = ask
-expect 'while a plain commit does not' yes \
-	test "$(jq_policy '.permission.bash["git commit *"]')" = allow
-expect 'a push does' yes test "$(jq_policy '.permission.bash["git push *"]')" = ask
-expect 'a credential change is refused' yes \
-	test "$(jq_policy '.permission.bash["*--password*"]')" = deny
+# The catalogue policy is still the sandbox's intended usability policy, but it is staged by
+# sandbox-entrypoint.sh into a per-container PI_CODING_AGENT_DIR rather than written into the repo.
+if jq -e . "$SRC/../config/pi-permission-policy.json" >/dev/null; then
+  ok 'the installed policy is valid JSON'
+else
+  bad 'the installed policy is valid JSON'
+fi
+expect 'the sandbox policy has yolo enabled for unattended operation' yes test "$(jq_policy .yoloMode)" = true
+expect 'destructive commands still have an ask guard' yes \
+  test "$(jq_policy '.permission.bash["*rm -rf*"]')" = ask
+expect 'pushes still have an ask guard' yes test "$(jq_policy '.permission.bash["git push *"]')" = ask
+expect 'credential-changing commands have a deny guard' yes \
+  test "$(jq_policy '.permission.bash["*--password*"]')" = deny
 
-# A project that narrows itself keeps its own file, never overwritten.
-printf '{"yoloMode": false, "permission": {"*": "ask"}}\n' >"$dest"
 run pi
-expect 'an existing project policy is left alone' yes \
-	test "$(jq_policy .yoloMode)" = false
+expect 'launching Pi does not seed a project-local permission policy' no test -e "$dest"
+expect 'launching Pi does not create host Pi trust state' no test -e "$trust"
+
+# Preserve an explicitly configured project policy and any existing host trust store.
+mkdir -p "$(dirname "$dest")" "$(dirname "$trust")"
+printf '{"yoloMode":false,"permission":{"*":"ask"}}\n' >"$dest"
+printf '{"existing-project":true}\n' >"$trust"
+cp "$dest" "$work/project-policy.before"
+cp "$trust" "$work/trust.before"
+run pi
+expect 'an existing project-local policy is byte-for-byte unchanged' yes \
+  cmp -s "$dest" "$work/project-policy.before"
+expect 'existing host Pi trust is byte-for-byte unchanged' yes \
+  cmp -s "$trust" "$work/trust.before"
 
 rm -f "$dest"
 run bash
-expect 'a non-pi session seeds nothing' no test -f "$dest"
+expect 'a non-Pi session also leaves project policy absent' no test -e "$dest"
+expect 'a non-Pi session leaves host trust unchanged' yes cmp -s "$trust" "$work/trust.before"
 
 if [ "$failed" -eq 0 ]; then
 	printf 'sandbox-permission-policy: ok\n'

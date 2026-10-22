@@ -16,17 +16,15 @@ reported.
 - Shell, aliasrc, Claude settings and the CLIs (ollama, glab, ant, acli) are in the image, not
   mounted from the host.
 - Browser QA is installed in the image: Playwright's pinned Chromium and its required shared
-  libraries, including the matching headless_shell, are baked in, so no sandbox needs an
-  egress grant to download a browser. Playwright's direct test uses the full Chromium build;
-  agent-browser uses /usr/local/bin/chromium-headless-shell via
-  AGENT_BROWSER_EXECUTABLE_PATH and launches it with
-  AGENT_BROWSER_ARGS=--no-sandbox,--disable-dev-shm-usage.
-- The full Chromium executable crashed when launched by agent-browser with
-  chrome_crashpad_handler: --database is required / Chrome exited before providing DevTools URL;
-  adding --no-sandbox alone did not resolve it. Pointing agent-browser at Playwright's
-  matching headless_shell launches it. make browser-check gates both Playwright and
-  agent-browser on rendering the served fixture, reading and changing its text, and writing a
-  screenshot, with the default /dev/shm a sandbox gets; it prints the screenshot directory.
+  libraries, including the matching headless shell, are baked in, so no sandbox needs an egress
+  grant to download a browser. `agent-browser` points at the image's
+  `/usr/local/bin/chromium-headless-shell` via `AGENT_BROWSER_EXECUTABLE_PATH`; the image does not
+  globally pass `--no-sandbox`, so Chromium's normal sandbox remains enabled.
+- **Known browser limitation (FAB-243):** Playwright can render the fixture, but `agent-browser`
+  has reported `chrome_crashpad_handler: --database is required` and exits before exposing a
+  DevTools URL. Keep the two paths distinct: `make browser-check` requires Docker and an image and
+  exercises the real browser; a successful static/unit test does not establish an `agent-browser`
+  runtime pass. The browser smoke test has not yet been made a required CI workflow check.
 - Every sandbox runs on its own network, with egress denied by default. [Egress](#egress) covers
   the allowlist, the host services and the ways out of it.
 - `config/base.conf` is the catalogue of what a sandbox may inherit, and `BASE=full` grants the
@@ -57,17 +55,22 @@ opts out of it, and `--offline` is the old name for the default bridge plus fire
   resolved when the sandbox starts, because the address behind it moves. If it resolves to no IPv4
   address, firewall initialization fails before installing any allow rules and the sandbox command
   does not start.
+- `host:<port>` opens only that TCP port on the container's own gateway. It does not resolve a
+  hostname and is accepted only from the launcher-generated, read-only service-grant file.
+- `<host>:<port>` resolves the named host and allows that port only on the resolved public, tailnet
+  or LAN addresses. It is resolved at startup because the address behind a name may move.
 
 An answer inside the container's own network or inside any other docker network of the host is
 refused, and so are loopback and the link-local metadata address, so a grant cannot be aimed at a
 sibling container. A private address outside those networks, the host's own tailnet or LAN address
 among them, opens like any other: that is what the grant is for, and it needs no host networking.
 
-The launcher writes the grant, and the networks it may not reach, into a read-only file the
-container mounts, never into the arguments: the sandbox user has sudo for the firewall script, so
-an argument would let it widen its own egress. A sibling that runs with host networking has no
-IPAM subnet, so this refusal does not cover it. Nothing else on the host or the sandbox network is
-reachable.
+The launcher writes grants and the networks the container may not reach into an individual
+read-only file, never into arguments. A root-only startup entrypoint reads that file, installs the
+firewall before running any agent command, then drops to `node` and removes `NET_ADMIN` and
+`NET_RAW` from the capability bounding set. The agent has no passwordless sudo rule for the
+firewall helper. `NETWORK=host` is an explicit opt-out from that firewall and remains a separate,
+higher-trust mode.
 
 ## Usage
 

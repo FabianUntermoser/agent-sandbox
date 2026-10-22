@@ -57,7 +57,7 @@ node -e '
 const { chromium } = require("playwright");
 const fs = require("fs");
 (async () => {
-  const args = ["--no-sandbox", "--disable-dev-shm-usage"];
+  const args = ["--disable-dev-shm-usage"];
   console.log("launch-args=" + args.join(" "));
   const browser = await chromium.launch({ args });
   const page = await browser.newPage({ viewport: { width: 900, height: 600 } });

@@ -121,6 +121,12 @@ chk "the resolved domain is added" "$(grep -c '^ipset add allowed-domains 104.18
 chk "the GitHub ranges are added" "$(grep -cE '^ipset add allowed-domains (140\.82\.112\.0/20|192\.30\.252\.0/22)$' "$T/calls" || true)" "2"
 chk "the allowlist rule is in place" "$(count '-A OUTPUT -m set --match-set allowed-domains dst -j ACCEPT')" "1"
 chk "the run reports the network" "$(says 'network:')" "yes"
+chk "UDP DNS egress targets only the embedded resolver" "$(count '-A OUTPUT -d 127.0.0.11 -p udp --dport 53 -j ACCEPT')" "1"
+chk "UDP DNS replies are restricted to the embedded resolver" "$(count '-A INPUT -s 127.0.0.11 -p udp --sport 53 -j ACCEPT')" "1"
+chk "TCP DNS egress targets only the embedded resolver" "$(count '-A OUTPUT -d 127.0.0.11 -p tcp --dport 53 -j ACCEPT')" "1"
+chk "TCP DNS replies are restricted to the embedded resolver" "$(count '-A INPUT -s 127.0.0.11 -p tcp --sport 53 -j ACCEPT')" "1"
+chk "unscoped UDP DNS egress is absent" "$(count '-A OUTPUT -p udp --dport 53 -j ACCEPT')" "0"
+chk "unscoped TCP DNS egress is absent" "$(count '-A OUTPUT -p tcp --dport 53 -j ACCEPT')" "0"
 
 printf '  a granted name that answers in tailnet space\n'
 fw tail.example:8317
@@ -136,7 +142,7 @@ chk "the EXIT trap leaves DROP policies in place" "$(last_policies)" "$DROP"
 chk "nothing was opened for the unresolved host" "$(ipt | grep -c -- '--dport 8317' || true)" "0"
 
 printf '  a host grant, which names the gateway itself\n'
-fw -- host:1313
+fw host:1313
 chk "the run succeeds" "$rc" "0"
 chk "the gateway is opened on that port" "$(count '-A OUTPUT -d 172.18.0.1 -p tcp --dport 1313 -j ACCEPT')" "1"
 chk "and on no other port" "$(ipt | grep -c -- '--dport 1313' || true)" "1"
@@ -144,6 +150,12 @@ chk "no name is resolved for the grant" "$(grep -c '^dig host' "$T/calls" || tru
 chk "the DROP policies are the first calls after the flush" "$(after_flush)" "$DROP"
 chk "and the last calls on the way out" "$(last_policies)" "$DROP"
 chk "no policy is ever set to ACCEPT" "$(never_accept)" "0"
+
+printf '  a host port cannot be granted through argv\n'
+fw -- host:1313
+chk "an argv-only host grant is refused" "$([ "$rc" -ne 0 ] && echo yes || echo no)" "yes"
+chk "no gateway port is opened for an argv-only host grant" "$(ipt | grep -c -- '172.18.0.1' || true)" "0"
+chk "the refusal occurs before the ruleset is flushed" "$(grep -c '^iptables -F$' "$T/calls" || true)" "0"
 
 printf '  a published container TCP port\n'
 fw published:3000
@@ -156,11 +168,11 @@ printf '  a published port without a gateway\n'
 FAKE_NO_GW=1 fw published:3000
 chk "the run fails closed when no container gateway can be determined" "$([ "$rc" -ne 0 ] && echo yes || echo no)" "yes"
 chk "no firewall rule set is flushed before the refusal" "$(grep -c '^iptables -F$' "$T/calls" || true)" "0"
-chk "the refusal explains the missing gateway" "$(says 'cannot determine the container gateway for published ports')" "yes"
+chk "the refusal explains the missing gateway" "$(says 'cannot determine the container gateway for declared port grants')" "yes"
 
 printf '  a host grant with a bad port\n'
 for bad in host:0 host:70000 host:abc host:; do
-	fw -- "$bad"
+	fw "$bad"
 	chk "$bad: the run fails" "$([ "$rc" -ne 0 ] && echo yes || echo no)" "yes"
 	chk "$bad: nothing is opened" "$(ipt | grep -c -- '172.18.0.1' || true)" "0"
 	chk "$bad: the policies end at DROP" "$(last_policies)" "$DROP"
@@ -172,7 +184,7 @@ for refused in own.example:172.18.0.9 sib.example:172.30.0.4 lo.example:127.0.0.
 	addr=${refused#*:}
 	fw closed=172.30.0.0/16 "$name:8317"
 	chk "$addr: the run succeeds" "$rc" "0"
-	chk "$addr: nothing is opened" "$(ipt | grep -c -- "-d $addr" || true)" "0"
+	chk "$addr: nothing is opened" "$(ipt | grep -c -- "-d $addr " || true)" "0"
 	chk "$addr: the run warns" "$(says "WARN: host service '$name:8317' resolved to no address")" "yes"
 	chk "$addr: the policies end at DROP" "$(last_policies)" "$DROP"
 done
