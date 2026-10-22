@@ -67,14 +67,20 @@ while IFS= read -r raw; do
 			die "$dockerfile has a FROM line this parse cannot read: $raw"
 		stage=$as_name
 	fi
-	# a later FROM reads the stage a name was given to, which its own FROM already pinned
-	[ -z "$stage" ] || stages[${stage,,}]=1
+	# Resolve the image against aliases from *earlier* stages before registering this stage's
+	# alias. `FROM alpine AS alpine` is an external image the first time it appears: registering
+	# `alpine` before looking up the image makes the line resolve to itself and skips the real base.
 	if [ -n "${stages[${image,,}]:-}" ]; then
 		printf 'scan-digests: %s builds on stage %s, already scanned\n' "$raw" "$image" >&2
+		[ -z "$stage" ] || stages[${stage,,}]=1
 		continue
 	fi
 	case $image in
-	scratch) printf 'scan-digests: %s has no base image, skipping\n' "$raw" >&2; continue ;;
+	scratch)
+		printf 'scan-digests: %s has no base image, skipping\n' "$raw" >&2
+		[ -z "$stage" ] || stages[${stage,,}]=1
+		continue
+		;;
 	esac
 
 	# the pinned reference is the FROM line itself, so nothing has to be kept in step by hand
@@ -94,7 +100,10 @@ while IFS= read -r raw; do
 	*[!0-9a-fA-F]*) die "$dockerfile has a malformed digest on $raw: $digest" ;;
 	esac
 	[ "${#digest}" -eq 64 ] || die "$dockerfile has a ${#digest} character digest on $raw, expected 64"
-	[ -z "${seen[$ref]:-}" ] || continue
+	if [ -n "${seen[$ref]:-}" ]; then
+		[ -z "$stage" ] || stages[${stage,,}]=1
+		continue
+	fi
 	seen[$ref]=1
 
 	# node:22-bookworm@sha256:... reads as node-base in the artifact tree, named for the image
@@ -113,6 +122,7 @@ while IFS= read -r raw; do
 
 	refs+=("$ref")
 	slugs+=("$slug")
+	[ -z "$stage" ] || stages[${stage,,}]=1
 done < <(sed -n 's/^[[:space:]]*[Ff][Rr][Oo][Mm]\([[:space:]].*\)\?$/\1/p' "$dockerfile")
 
 [ "${#refs[@]}" -gt 0 ] || die "$dockerfile has no base image to scan"

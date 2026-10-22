@@ -30,9 +30,15 @@ readable() { # <report>
 				or ((.Vulnerabilities != null) and (.Vulnerabilities | type != "array")))] | length) == 0
 		and ([.Results[]?.Vulnerabilities[]?
 			| select((type != "object")
-				or ((.Severity != null) and (.Severity | type != "string"))
-				or ((.VulnerabilityID != null) and (.VulnerabilityID | type != "string"))
-				or ((.FixedVersion != null) and (.FixedVersion | type != "string")))] | length) == 0
+				or ((.VulnerabilityID | type) != "string")
+				or ((.VulnerabilityID | length) == 0)
+				or ((.Severity | type) != "string")
+				or (.Severity != "UNKNOWN" and .Severity != "LOW" and .Severity != "MEDIUM" and .Severity != "HIGH" and .Severity != "CRITICAL")
+				or ((.PkgName | type) != "string")
+				or ((.PkgName | length) == 0)
+				or ((.InstalledVersion | type) != "string")
+				or ((.InstalledVersion | length) == 0)
+				or ((.FixedVersion != null) and ((.FixedVersion | type) != "string")))] | length) == 0
 	' "$1" >/dev/null 2>&1
 }
 

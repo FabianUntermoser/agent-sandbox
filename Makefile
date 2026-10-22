@@ -18,6 +18,7 @@ check:
 	./scripts/sandbox-permission-policy.test.sh
 	./scripts/image-build.test.sh
 	./scripts/scan-digests.test.sh
+	./scripts/gate.test.sh
 
 # Real container: the browser is what it proves, so it needs docker and the image.
 browser-check:
