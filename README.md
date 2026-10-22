@@ -131,6 +131,62 @@ Deliberately not inherited: the host shell stack (both environments keep their o
 history), `~/.ssh`, and the curated vault layers. Project symlinks into those are refused with a
 message; an explicit `MOUNTS` entry overrides.
 
+The rule the catalogue follows: **anything the host pi loads is read-only in here.** That is
+`~/.pi/agent/extensions`, `~/.pi/agent/npm` (the packages `settings.json` resolves) and
+`~/.pi/agent/git` (the checkouts extension packages are built from). A sandbox that could write to
+them would be handing the host code to run at its next start. `scripts/sandbox-agent-mounts.test.sh`
+pins each one against the shipped catalogue, so the rule survives the next edit.
+
+The reverse also holds: a tool the sandbox's own extensions call has to exist in here. The image
+ships `/usr/local/bin/hypa` as a shim over the mounted package tree, because the host shim execs an
+absolute path under the operator's home that this container does not have.
+
+## Tools
+
+A tool is one data file in `config/tools.d/`, installed by `make setup` to
+`~/.config/agent-sandbox/tools.d/`. A manifest grants it by name, `TOOLS="linear"`, and the run
+mounts what the file names. Nothing in this repo, the image or a launcher knows any tool by name,
+so a new tool is a new file plus that key: no edit here, no image rebuild.
+
+```
+OPT_IN=true
+SKILL_HOST=~/.agents/skills/linear                     # a directory, read-only
+SKILL_CONTAINER=/home/node/.agents/skills/linear
+CRED_HOST=~/.agent-secrets/linear-app.env              # one file, never a directory
+CRED_CONTAINER=/home/node/.agent-secrets/linear-app.env
+CLI_HOST=~/.agents/skills/linear/scripts/linear-api.sh # resolved before mounting, so a
+CLI_CONTAINER=/usr/local/bin/linear-api.sh             # stow-farm link is not followed
+HOSTS=api.linear.app:443                               # egress, resolved at start
+```
+
+- Every host key needs its `*_CONTAINER`; half a pair stops the run.
+- `CRED_HOST` must be a regular file. A directory would hand over every key beside the one named.
+- `CLI_HOST` is mounted at its resolved path, so a stow-farm shim arrives as the script and the
+  farm stays out of the container.
+- `HOSTS` is a `<host>:<port>` pair per entry. The launcher writes them into the read-only grant
+  file the firewall reads, so egress is resolved when the container starts, never at build time,
+  and a tool that needs a new domain needs no rebuild.
+- `OPT_IN=true` means the manifest has to name the tool. `OPT_IN=false` grants it to every run.
+- Unknown keys, an unknown tool name and a malformed entry all stop the run instead of mounting
+  less than was asked for.
+
+A tool that needs a system package or a daemon is the exception: that is an image layer plus a
+service grant, and it is documented in the tool's own file.
+
+## Permissions inside the sandbox
+
+Docker is the security boundary, so the agent inside does not stop for approval. `make setup` also
+installs `config/pi-permission-policy.json` to `~/.config/agent-sandbox/`, and a `pi` run copies it
+into the project at `.pi/extensions/pi-permission-system/config.json` when the project has none.
+That is the only scope a sandbox can supply: the host policy is a symlink the container never
+resolves, and mounting it would hand a sandbox the host's own rule set.
+
+The policy is yolo with the destructive list still asking: `rm -rf`, a volume drop, `git push`,
+`gh pr`/`release`/`api`, a publish, a deploy, `docker push`, and a deny on anything that takes a
+password or an API key. A project that carries its own policy keeps it, so a repository can narrow
+itself and the launcher will not overwrite that file. `PI_POLICY=<file>` names a different template
+for one run.
+
 ## Steering a running sandbox
 
 `sandbox-panes.sh` talks to the tmux server inside a running container, so an agent on the host
@@ -210,6 +266,7 @@ TMUX=true                 # ~/.tmux.conf
 NETWORK=host              # host networking; default is bridge + firewall
 HOST_SERVICES=ollama      # open the host gateway on port 11434
 HOST_SERVICES=name:443    # or one name the host routes to, on that port
+TOOLS="linear"            # tools granted from ~/.config/agent-sandbox/tools.d
 MOUNTS=(                  # extra host paths: "src:dest" per line
   # "/host/path:/container/path"
 )

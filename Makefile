@@ -6,6 +6,7 @@ check:
 	./scripts/public-ip.sh --self-check
 	./scripts/sandbox-agent-mounts.test.sh
 	./scripts/sandbox-manifest.test.sh
+	./scripts/sandbox-tools.test.sh
 	./scripts/sandbox-name.test.sh
 	./scripts/sandbox-git-fence.test.sh
 	./scripts/sandbox-firewall.test.sh
