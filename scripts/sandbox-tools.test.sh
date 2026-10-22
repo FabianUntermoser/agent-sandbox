@@ -222,9 +222,11 @@ only vault \
 run 'TOOLS="vault"'
 expect_stopped "a vault layer as a skill stops the run" "one the sandbox may not see"
 
-# an agent directory granted by AGENTS already puts a link target at its own guest path, and the
-# tool asking for that same target is a grant already in place, not a conflict
-printf 'dir   %s  ro\nfollow %s  grant=AGENTS\n' "$home/.agents" "$farm" >"$work/base.conf"
+# An agent directory granted by AGENTS puts a link target at its own guest path, writable as a
+# directory, and a tool naming that same file is the grant already in place. The tool's request is
+# read-only, so the mount that survives is the read-only one: the writable view is what a sandbox
+# could edit the dots checkout through.
+printf 'follow %s  grant=AGENTS\ndir   %s\n' "$farm" "$home/.agents" >"$work/base.conf"
 tool sameplace \
 	"SKILL_HOST=$home/.agents/skills/linear" \
 	"SKILL_CONTAINER=/home/node/.agents/skills/linear"
@@ -236,11 +238,16 @@ out=$(cd "$work" && HOME="$home" XDG_RUNTIME_DIR="$work/run" BASE_CONF="$work/ba
 status=$?
 set -e
 printf '%s\n' "$out" >"$work/out"
-if [ "$status" -eq 0 ]; then
-	printf '  ok    the same source at a destination an agent grant already holds is the same grant\n'
-else
+if [ "$status" -ne 0 ]; then
 	printf '  FAIL  the same grant counted as a collision (status %s)\n' "$status" >&2
 	sed 's/^/        /' "$work/out" >&2
+	failed=1
+elif grep -Fxq "$farm/skills/linear:/home/node/.agents/skills/linear:ro" "$work/args" \
+	&& ! grep -Fxq "$farm/skills/linear:/home/node/.agents/skills/linear" "$work/args"; then
+	printf '  ok    a grant an agent directory already holds arrives read-only, not writable\n'
+else
+	printf '  FAIL  the tool grant did not narrow the writable agent mount\n' >&2
+	grep -F "$farm/skills/linear:" "$work/args" | sed 's/^/        /' >&2
 	failed=1
 fi
 rm -f "$work/tools.d/sameplace.conf"

@@ -644,12 +644,14 @@ tool_mount() { # <source> <destination> <what>
 	case "/$2/" in
 	*/../*) die "$tool_file: $3 destination carries a parent segment: $2" ;;
 	esac
-	# An agent directory granted by AGENTS already puts a link target at its own guest path. The same
-	# source at the same destination is that grant, satisfied, so it is left as it is.
+	# An agent directory granted by AGENTS already puts a link target at its own guest path, and a
+	# tool asking for that same file is the grant already in place. It is replaced rather than
+	# accepted, because a tool grant is read-only and the earlier mount may be writable: narrowing a
+	# view of one file is the whole point, and a different source at that destination is a conflict.
 	if [ -n "${_seen_mounts[$2]:-}" ]; then
 		[ "${_seen_mounts[$2]}" = "$1" ] ||
 			die "$tool_file: $3 cannot mount at $2, that destination already holds ${_seen_mounts[$2]}"
-		return 0
+		drop_mount "$2"
 	fi
 	add_mount "$1" "$2" ro
 }
