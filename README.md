@@ -149,7 +149,6 @@ mounts what the file names. Nothing in this repo, the image or a launcher knows 
 so a new tool is a new file plus that key: no edit here, no image rebuild.
 
 ```
-OPT_IN=true
 SKILL_HOST=~/.agents/skills/linear                     # a directory, read-only
 SKILL_CONTAINER=/home/node/.agents/skills/linear
 CRED_HOST=~/.agent-secrets/linear-app.env              # one file, never a directory
@@ -166,9 +165,14 @@ HOSTS=api.linear.app:443                               # egress, resolved at sta
 - `HOSTS` is a `<host>:<port>` pair per entry. The launcher writes them into the read-only grant
   file the firewall reads, so egress is resolved when the container starts, never at build time,
   and a tool that needs a new domain needs no rebuild.
-- `OPT_IN=true` means the manifest has to name the tool. `OPT_IN=false` grants it to every run.
-- Unknown keys, an unknown tool name and a malformed entry all stop the run instead of mounting
-  less than was asked for.
+- Naming the tool is the whole of the opt-in. A catalogue entry nobody names grants nothing, and a
+  broken one cannot stop a run that does not ask for it.
+- A destination another grant already holds, a host path without its destination, a destination that
+  is not absolute or that carries a colon, an unknown key, an unknown tool name, a port outside
+  1..65535 and a name the firewall cannot resolve all stop the run instead of mounting less than was
+  asked for.
+- A grant may not reach the vault or a key: the check the base catalogue applies is applied here
+  too, so `CRED_HOST=~/.ssh/id_ed25519` is refused rather than mounted.
 
 A tool that needs a system package or a daemon is the exception: that is an image layer plus a
 service grant, and it is documented in the tool's own file.
