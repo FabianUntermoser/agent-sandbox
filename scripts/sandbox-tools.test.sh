@@ -199,6 +199,17 @@ only colon \
 run 'TOOLS="colon"'
 expect_stopped "a destination carrying a colon stops the run" "carries a colon"
 
+only parent \
+	"SKILL_HOST=$farm/second" \
+	"SKILL_CONTAINER=/home/node/.agents/../secrets"
+run 'TOOLS="parent"'
+expect_stopped "a destination carrying a parent segment stops the run" "carries a parent segment"
+
+only emptyvalue \
+	"SKILL_HOST="
+run 'TOOLS="emptyvalue"'
+expect_stopped "a key present with no value stops the run" "SKILL_HOST has no value"
+
 only key \
 	"CRED_HOST=$home/.ssh/id_ed25519" \
 	"CRED_CONTAINER=/home/node/.ssh/id_ed25519"
@@ -211,13 +222,36 @@ only vault \
 run 'TOOLS="vault"'
 expect_stopped "a vault layer as a skill stops the run" "one the sandbox may not see"
 
+# an agent directory granted by AGENTS already puts a link target at its own guest path, and the
+# tool asking for that same target is a grant already in place, not a conflict
+printf 'dir   %s  ro\nfollow %s  grant=AGENTS\n' "$home/.agents" "$farm" >"$work/base.conf"
+tool sameplace \
+	"SKILL_HOST=$home/.agents/skills/linear" \
+	"SKILL_CONTAINER=/home/node/.agents/skills/linear"
+printf 'AGENTS="pi"\nTOOLS="sameplace"\n' >"$work/.sandbox.conf"
+rm -f "$work/args" "$work/run"/agent-sandbox/* 2>/dev/null || true
+set +e
+out=$(cd "$work" && HOME="$home" XDG_RUNTIME_DIR="$work/run" BASE_CONF="$work/base.conf" \
+	TOOLS_DIR="$work/tools.d" PATH="$stub:$PATH" "$SRC/sandbox.sh" --stdio --new true 2>&1)
+status=$?
+set -e
+printf '%s\n' "$out" >"$work/out"
+if [ "$status" -eq 0 ]; then
+	printf '  ok    the same source at a destination an agent grant already holds is the same grant\n'
+else
+	printf '  FAIL  the same grant counted as a collision (status %s)\n' "$status" >&2
+	sed 's/^/        /' "$work/out" >&2
+	failed=1
+fi
+rm -f "$work/tools.d/sameplace.conf"
+
 # base.conf already holds the tree the tool wants, which is the shape a collision takes
 printf 'dir   %s/skills  ro\n' "$home/.agents" >"$work/base.conf"
 only collision \
 	"SKILL_HOST=$farm/second" \
 	"SKILL_CONTAINER=/home/node/.agents/skills"
 run 'TOOLS="collision"'
-expect_stopped "a destination another grant already holds stops the run" "that destination already holds a mount"
+expect_stopped "a destination another grant already holds stops the run" "that destination already holds"
 printf '# nothing inherited from the host in these cases\n' >"$work/base.conf"
 
 [[ $failed == 0 ]] && echo "sandbox-tools: ok"

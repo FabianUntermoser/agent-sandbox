@@ -168,9 +168,11 @@ HOSTS=api.linear.app:443                               # egress, resolved at sta
 - Naming the tool is the whole of the opt-in. A catalogue entry nobody names grants nothing, and a
   broken one cannot stop a run that does not ask for it.
 - A destination another grant already holds, a host path without its destination, a destination that
-  is not absolute or that carries a colon, an unknown key, an unknown tool name, a port outside
-  1..65535 and a name the firewall cannot resolve all stop the run instead of mounting less than was
-  asked for.
+  is not absolute or that carries a colon or a parent segment, a key with no value, an unknown key,
+  an unknown tool name, a port outside 1..65535 and a name the firewall cannot resolve all stop the
+  run instead of mounting less than was asked for.
+- A tool naming the same file an agent directory already mounts at that path is granted, not a
+  collision: `AGENTS="pi"` with `TOOLS="linear"` is the case, and the mount stays read-only.
 - A grant may not reach the vault or a key: the check the base catalogue applies is applied here
   too, so `CRED_HOST=~/.ssh/id_ed25519` is refused rather than mounted.
 

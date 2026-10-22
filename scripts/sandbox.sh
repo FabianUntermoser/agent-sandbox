@@ -234,7 +234,7 @@ add_mount() {
 	# docker refuses two mounts on one destination, whatever their source or mode
 	# is, so the destination alone is what may appear once
 	[ -n "${_seen_mounts[$dest]:-}" ] && return
-	_seen_mounts[$dest]=1
+	_seen_mounts[$dest]=$src
 	mounts+=(-v "$src:$dest${mode:+:$mode}")
 }
 
@@ -606,6 +606,11 @@ tool_read() { # <file>
 		value=${value#"${value%%[![:space:]]*}"}
 		value=${value%"${value##*[![:space:]]}"}
 		case "$key" in
+		SKILL_HOST|SKILL_CONTAINER|CRED_HOST|CRED_CONTAINER|CLI_HOST|CLI_CONTAINER|HOSTS)
+			[ -n "$value" ] || die "$1: $key has no value" ;;
+		*) die "$1: unknown key '$key'" ;;
+		esac
+		case "$key" in
 		SKILL_HOST) TOOL_SKILL_HOST=$value ;;
 		SKILL_CONTAINER) TOOL_SKILL_CONTAINER=$value ;;
 		CRED_HOST) TOOL_CRED_HOST=$value ;;
@@ -613,7 +618,6 @@ tool_read() { # <file>
 		CLI_HOST) TOOL_CLI_HOST=$value ;;
 		CLI_CONTAINER) TOOL_CLI_CONTAINER=$value ;;
 		HOSTS) TOOL_HOSTS=$value ;;
-		*) die "$1: unknown key '$key'" ;;
 		esac
 	done <"$1"
 }
@@ -640,8 +644,13 @@ tool_mount() { # <source> <destination> <what>
 	case "/$2/" in
 	*/../*) die "$tool_file: $3 destination carries a parent segment: $2" ;;
 	esac
-	[ -z "${_seen_mounts[$2]:-}" ] ||
-		die "$tool_file: $3 cannot mount at $2, that destination already holds a mount"
+	# An agent directory granted by AGENTS already puts a link target at its own guest path. The same
+	# source at the same destination is that grant, satisfied, so it is left as it is.
+	if [ -n "${_seen_mounts[$2]:-}" ]; then
+		[ "${_seen_mounts[$2]}" = "$1" ] ||
+			die "$tool_file: $3 cannot mount at $2, that destination already holds ${_seen_mounts[$2]}"
+		return 0
+	fi
 	add_mount "$1" "$2" ro
 }
 
