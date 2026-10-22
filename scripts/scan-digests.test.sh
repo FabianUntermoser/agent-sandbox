@@ -36,6 +36,7 @@ chmod +x "$stub/docker"
 # run <line>...: writes those lines as the Dockerfile and runs the parse over it
 run() {
 	printf '%s\n' "$@" >"$work/Dockerfile"
+	rm -rf "$work/out"
 	rm -f "$work/pulled" "$work/scanned"
 	set +e
 	out=$(cd "$work" && PATH="$stub:$PATH" "$stub/security/scan-digests.sh" "$work/out" "$work/Dockerfile" 2>&1)
@@ -55,13 +56,19 @@ run() {
 }
 
 expect() { # <label> <want-pulled> <want-status: ok|fail>
-	local label=$1 want=$2 want_status=$3 got_status=ok
+	local label=$1 want=$2 want_status=$3 got_status=ok manifest_count=0 want_count=0
 	[ "$status" -eq 0 ] || got_status=fail
-	if [ "$pulled" = "$want" ] && [ "$scanned" = "$want" ] && [ "$got_status" = "$want_status" ]; then
+	if [ -f "$work/out/scan-manifest.txt" ]; then
+		manifest_count=$(grep -c . "$work/out/scan-manifest.txt")
+	fi
+	if [ "$want_status" = ok ]; then
+		want_count=$(wc -w <<<"$want")
+	fi
+	if [ "$pulled" = "$want" ] && [ "$scanned" = "$want" ] && [ "$got_status" = "$want_status" ] && [ "$manifest_count" -eq "$want_count" ]; then
 		printf '  ok    %s\n' "$label"
 	else
 		printf '  FAIL  %s: wanted pull/scan %s/%s, got %s/%s (%s)\n' "$label" "$want" "$want" "$pulled" "$scanned" "$got_status" >&2
-		printf '        status %s, last lines:\n' "$status" >&2
+		printf '        status %s, manifest lines %s/%s, last lines:\n' "$status" "$manifest_count" "$want_count" >&2
 		tail -4 <<<"$out" | sed 's/^/        /' >&2
 		failed=1
 	fi
@@ -97,6 +104,37 @@ expect 'the platform flag is not the reference' "node:22@sha256:$hex" ok
 
 run "ARG NODE=22" "ARG DIGEST=sha256:$hex" 'FROM node:${NODE}@${DIGEST}'
 expect 'build arg defaults resolve' "node:22@sha256:$hex" ok
+
+# Reusing an output directory must not retain a prior base image or its manifest entry.
+run "FROM alpine@sha256:$hex"
+expect 'initial base scan creates its manifest' "alpine@sha256:$hex" ok
+printf 'stale-base\n' >>"$work/out/scan-manifest.txt"
+mkdir -p "$work/out/stale-base"
+printf 'stale report\n' >"$work/out/stale-base/trivy.json"
+printf 'FROM busybox@sha256:%s\n' "$hex" >"$work/Dockerfile"
+rm -f "$work/pulled" "$work/scanned"
+set +e
+out=$(cd "$work" && PATH="$stub:$PATH" "$stub/security/scan-digests.sh" "$work/out" "$work/Dockerfile" 2>&1)
+status=$?
+set -e
+pulled=""
+scanned=""
+[ ! -f "$work/pulled" ] || pulled=$(sort -u "$work/pulled" | tr '\n' ' ')
+[ ! -f "$work/scanned" ] || scanned=$(sort -u "$work/scanned" | tr '\n' ' ')
+manifest=$(cat "$work/out/scan-manifest.txt")
+if [ "$status" -eq 0 ] && [ "$pulled" = "busybox@sha256:$hex " ] && [ "$scanned" = "busybox@sha256:$hex " ] && [ "$manifest" = "busybox-base" ] && [ ! -e "$work/out/stale-base" ] && [ ! -e "$work/out/alpine-base" ]; then
+	printf '  ok    a rerun replaces the expected-image manifest and clears stale base artifacts\n'
+else
+	printf '  FAIL  a rerun left stale manifest/artifacts (manifest=%s, status=%s)\n' "$manifest" "$status" >&2
+	tail -4 <<<"$out" | sed 's/^/        /' >&2
+	failed=1
+fi
+
+run "arg NODE=22" "arg DIGEST=sha256:$hex" 'from node:${NODE}@${DIGEST} as first' "ARG NODE=20" 'FROM alpine:${NODE}@${DIGEST}'
+expect 'stage-scoped ARG cannot override the global FROM default' "alpine:22@sha256:$hex node:22@sha256:$hex" ok
+
+run 'ARG NODE' "ARG DIGEST=sha256:$hex" 'FROM node:${NODE}@${DIGEST}'
+expect 'a FROM variable without a global default fails closed' '' fail
 
 run "# FROM node:22@sha256:$hex" "FROM alpine@sha256:$hex"
 expect 'a commented instruction is not one' "alpine@sha256:$hex" ok

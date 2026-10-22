@@ -1,7 +1,7 @@
 name: Security
 
 # Every image this repository builds or pins is inventoried with Syft and scanned with Trivy, and
-# a fixable high-severity finding from a distro advisory fails the run. What runs, what it means
+# a fixable HIGH or CRITICAL finding fails the run. What runs, what it means
 # and how to run the same checks locally: SECURITY.md.
 
 on:
@@ -50,6 +50,7 @@ jobs:
           # between the build and the scan. A fresh runner holds no cache, so the base at its
           # pinned digest and every apt and npm install arrive as they are today.
           mkdir -p security-out/agent-sandbox
+          printf '%s\n' agent-sandbox > security-out/scan-manifest.txt
           id=$(docker image inspect --format '{{.Id}}' agent-sandbox:latest)
           printf '%s %s %s build\n' agent-sandbox "$id" "$GITHUB_SHA" \
             > security-out/agent-sandbox/scan-target.txt

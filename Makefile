@@ -31,7 +31,11 @@ worktree-check:
 	./scripts/sandbox-git-hooks.test.sh
 
 # reports land in security-out/, which git ignores: they are evidence for a run, not for the repo
-scan: build
+scan:
+	rm -rf security-out
+	$(MAKE) build
+	mkdir -p security-out/agent-sandbox
+	printf '%s\n' agent-sandbox > security-out/scan-manifest.txt
 	./security/scan.sh "$$(docker image inspect --format '{{.Id}}' agent-sandbox:latest)" security-out/agent-sandbox
 	./security/scan-digests.sh security-out
 

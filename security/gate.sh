@@ -42,14 +42,27 @@ readable() { # <report>
 	' "$1" >/dev/null 2>&1
 }
 
+manifest="$dir/scan-manifest.txt"
+[ -s "$manifest" ] || die "no scan manifest under $dir, refusing to pass"
 blocked=0
 found=0
 total=0
-for report in "$dir"/*/trivy.json; do
-	[ -f "$report" ] || continue
+declare -A seen=()
+while IFS= read -r image || [ -n "$image" ]; do
+	[[ "$image" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || die "invalid image name in scan manifest: $image"
+	[ -z "${seen[$image]:-}" ] || die "duplicate image in scan manifest: $image"
+	seen[$image]=1
+	image_dir="$dir/$image"
+	report="$image_dir/trivy.json"
+	[ -d "$image_dir" ] || die "$image has no report directory, refusing to pass"
+	[ -s "$report" ] || die "$image has no readable trivy report, refusing to pass"
+	[ -s "$image_dir/scan-target.txt" ] || die "$image has no scan target metadata, refusing to pass"
+	[ -s "$image_dir/scanner-versions.txt" ] || die "$image has no scanner version metadata, refusing to pass"
+	sbom="$image_dir/syft.cdx.json"
+	[ -s "$sbom" ] || die "$image has no Syft SBOM, refusing to pass"
+	jq -e 'type == "object" and .bomFormat == "CycloneDX" and (.components | type == "array")' "$sbom" >/dev/null 2>&1 ||
+		die "$image has an invalid CycloneDX SBOM, refusing to pass"
 	found=1
-	image=${report%/*}
-	image=${image##*/}
 
 	# An empty, truncated or unreadable file, and a report whose entries are not what the count
 	# below expects, all land here.
@@ -64,8 +77,7 @@ for report in "$dir"/*/trivy.json; do
 	severities=$(jq -r '[.Results[]?.Vulnerabilities[]? | .Severity]
 		| group_by(.) | map("\(.[0])=\(length)") | join(" ")' "$report")
 
-	target=unknown
-	[ ! -f "$dir/$image/scan-target.txt" ] || target=$(cat "$dir/$image/scan-target.txt")
+	target=$(cat "$image_dir/scan-target.txt")
 
 	printf '%s  target=%s\n' "$image" "$target"
 	printf '  trivy  sev: %s  blocking: %s\n' "${severities:-none}" "$fixable"
@@ -78,19 +90,22 @@ for report in "$dir"/*/trivy.json; do
 		blocked=1
 		total=$((total + fixable))
 	fi
-done
+done < "$manifest"
 
-# A gate with nothing to read has not passed, it has failed to look. The scan job runs before this
-# one, so a missing report is a broken artifact and never a clean image.
 [ "$found" -eq 1 ] || die "no trivy report under $dir, refusing to pass"
+for image_dir in "$dir"/*; do
+	[ -d "$image_dir" ] || continue
+	image=${image_dir##*/}
+	[ -n "${seen[$image]:-}" ] || die "$image has artifacts but is absent from scan manifest"
+done
 
 if [ "$blocked" -ne 0 ]; then
 	if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
-		printf 'Security gate: %s fixable high-severity finding(s), listed above in the job log.\n' \
+		printf 'Security gate: %s fixable HIGH/CRITICAL finding(s), listed above in the job log.\n' \
 			"$total" >>"$GITHUB_STEP_SUMMARY"
 	fi
 	if [ -n "${GITHUB_ACTIONS:-}" ]; then
-		printf '::error title=Security gate::%s fixable high-severity finding(s)\n' "$total"
+		printf '::error title=Security gate::%s fixable HIGH/CRITICAL finding(s)\n' "$total"
 	fi
 	die "policy exceeded"
 fi

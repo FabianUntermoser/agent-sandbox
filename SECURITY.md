@@ -1,7 +1,7 @@
 # Security
 
 Every image this repository builds or pulls is inventoried and vulnerability-scanned, and a
-fixable high-severity advisory fails the run that produced it. The scans run in
+fixable HIGH or CRITICAL advisory fails the run that produced it. The scans run in
 [`.github/workflows/security.yml`](.github/workflows/security.yml), the scripts in
 [`security/`](security) produce the reports, and `security/gate.sh` decides.
 
@@ -45,9 +45,11 @@ the same commit as the exception.
 
 ## Reports
 
-Reports are CI artifacts kept for 90 days and never committed: `trivy.json`, `syft.cdx.json`,
-`scan-target.txt`, `scanner-versions.txt` and `timings.txt`, one directory per image,
-`security-out/agent-sandbox` and `security-out/node-base`.
+Reports are CI artifacts kept for 90 days and never committed. `scan-manifest.txt` lists every
+image expected in the run; each image directory must contain a valid Trivy report, a CycloneDX
+SBOM, the scan target and scanner versions. A missing, malformed or unlisted artifact fails the
+gate. Reports live in one directory per image, currently `security-out/agent-sandbox` and
+`security-out/node-base`.
 
 An SBOM belongs to the image it came from plus the run that produced it: image id and commit for a
 build, digest for a pinned base. A rebuild of the same commit into a different image is a
@@ -62,7 +64,9 @@ for 60 days, so a long quiet spell is worth a manual run.
 
 ## Run the same checks locally
 
-`make scan` builds the image and writes the reports. `make gate` applies the policy to them.
+`make scan` clears old reports, builds the image and writes fresh reports. `make gate` applies
+the policy to them. If a build or scan fails, an earlier run cannot leave reports that make the
+next gate look green.
 
 ```sh
 make scan

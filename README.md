@@ -323,7 +323,7 @@ first, then its own grants as it is tightened.
 
 ## Security
 
-Every image this repository builds or pins is scanned, and a fixable high-severity finding fails
+Every image this repository builds or pins is scanned, and a fixable HIGH or CRITICAL finding fails
 the run. See [SECURITY.md](SECURITY.md).
 
 ## License

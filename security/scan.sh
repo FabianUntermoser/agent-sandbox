@@ -89,6 +89,8 @@ run_to trivy cold "$out/trivy.json" docker run --rm \
 log syft
 run_to syft cold "$out/syft.cdx.json" docker run --rm -v "$socket:$socket" "$syft_image" \
 	"docker:$ref" -q -o cyclonedx-json
+jq -e 'type == "object" and .bomFormat == "CycloneDX" and (.components | type == "array")' \
+	"$out/syft.cdx.json" >/dev/null 2>&1 || die "Syft did not produce a valid CycloneDX SBOM"
 
 log summary
 components=$(jq '.components | length' "$out/syft.cdx.json")
@@ -96,11 +98,6 @@ severities=$(jq -r '[.Results[]?.Vulnerabilities[]? | .Severity]
 	| group_by(.) | map("\(.[0])=\(length)") | join(" ")' "$out/trivy.json")
 printf 'syft components: %s\n' "$components"
 printf 'trivy severities: %s\n' "${severities:-none}"
-printf '%s\n' 'trivy findings:'
-jq -r '.Results[]?.Vulnerabilities[]?
-	| "  \(.Severity)\t\(.VulnerabilityID)\t\(.PkgName) \(.InstalledVersion)\tfix: \(.FixedVersion // "none")"' \
-	"$out/trivy.json" | sort -u
-
 # A GitHub run gets the same numbers in its summary, where a reviewer reads them without opening
 # the artifact.
 if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then

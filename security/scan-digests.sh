@@ -29,13 +29,14 @@ out=$(cd "$out" && pwd)
 
 ## RESOLVE
 
-# The build arg defaults, then every FROM line that reads them, in file order. Each stage pins its
-# own base, and each one is scanned.
+# Only global ARG defaults can affect FROM; stage-local ARGs cannot change later FROM lines.
 declare -A args=()
 while IFS= read -r line; do
-	args[${line%%=*}]=${line#*=}
-done < <(sed -n 's/^ARG \([A-Za-z_][A-Za-z0-9_]*\)=\(.*\)$/\1=\2/p' "$dockerfile")
-
+	[[ $line =~ ^[[:space:]]*[Ff][Rr][Oo][Mm][[:space:]] ]] && break
+	if [[ $line =~ ^[[:space:]]*[Aa][Rr][Gg][[:space:]]+([A-Za-z_][A-Za-z0-9_]*)=([^[:space:]]*)[[:space:]]*$ ]]; then
+		args[${BASH_REMATCH[1]}]=${BASH_REMATCH[2]}
+	fi
+done < "$dockerfile"
 declare -A stages=()  # aliases named by `AS <name>`, matched case-insensitively as Docker does
 declare -A seen=()    # one scan per distinct reference
 declare -A taken=()   # one artifact directory per slug
@@ -87,8 +88,10 @@ while IFS= read -r raw; do
 	ref=$image
 	while [[ $ref =~ \$\{([A-Za-z_][A-Za-z0-9_]*)\} ]]; do
 		name=${BASH_REMATCH[1]}
-		ref=${ref//\$\{$name\}/${args[$name]:-}}
+		[[ -v "args[$name]" ]] || die "$dockerfile has no global ARG default for $name in $raw"
+		ref=${ref//\$\{$name\}/${args[$name]}}
 	done
+	[[ $ref != *'$'* ]] || die "$dockerfile has an unresolved variable in $raw"
 
 	case "$ref" in
 	*@sha256:*) digest=${ref##*@sha256:} ;;
@@ -126,6 +129,25 @@ while IFS= read -r raw; do
 done < <(sed -n 's/^[[:space:]]*[Ff][Rr][Oo][Mm]\([[:space:]].*\)\?$/\1/p' "$dockerfile")
 
 [ "${#refs[@]}" -gt 0 ] || die "$dockerfile has no base image to scan"
+
+# Record every base before scanning any of them so an interrupted run cannot look complete.
+manifest="$out/scan-manifest.txt"
+# Remove prior base artifacts listed by this script before replacing the manifest. A failed
+# scan must not leave a previous report eligible to pass the current gate.
+if [ -f "$manifest" ]; then
+	while IFS= read -r old_slug || [ -n "$old_slug" ]; do
+		[[ "$old_slug" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || continue
+		# This directory belongs to the separately scanned final image, not an external FROM.
+		[ "$old_slug" != "agent-sandbox" ] || continue
+		rm -rf "$out/$old_slug"
+	done < "$manifest"
+fi
+: > "$manifest"
+for slug in "${slugs[@]}"; do
+	printf '%s\n' "$slug" >>"$manifest"
+	# Old artifacts from a previous invocation must not satisfy this run's manifest.
+	rm -rf "$out/$slug"
+done
 
 ## SCAN
 

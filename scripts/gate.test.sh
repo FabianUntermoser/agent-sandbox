@@ -10,12 +10,26 @@ pass=0
 fail=0
 counter=0
 
-check() { # <label> <pass|fail> <json>
-  local label=$1 wanted=$2 json=$3 status got=pass out
+check() { # <label> <pass|fail> <json> [artifact fault]
+  local label=$1 wanted=$2 json=$3 fault=${4:-valid} status got=pass out
   counter=$((counter + 1))
   local dir="$T/case-$counter"
   mkdir -p "$dir/report"
   printf '%s\n' "$json" >"$dir/report/trivy.json"
+  printf 'report\n' >"$dir/scan-manifest.txt"
+  printf 'test-image sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa test-commit build\n' >"$dir/report/scan-target.txt"
+  printf 'Trivy test version\nSyft test version\n' >"$dir/report/scanner-versions.txt"
+  printf '{"bomFormat":"CycloneDX","specVersion":"1.5","version":1,"components":[]}\n' >"$dir/report/syft.cdx.json"
+  case "$fault" in
+    missing-manifest) rm -f "$dir/scan-manifest.txt" ;;
+    missing-target) rm -f "$dir/report/scan-target.txt" ;;
+    missing-versions) rm -f "$dir/report/scanner-versions.txt" ;;
+    missing-sbom) rm -f "$dir/report/syft.cdx.json" ;;
+    invalid-sbom) printf '{"bomFormat":"not-CycloneDX","components":[]}\n' >"$dir/report/syft.cdx.json" ;;
+    missing-trivy) rm -f "$dir/report/trivy.json" ;;
+    unlisted-directory) mkdir -p "$dir/unlisted" ;;
+    duplicate-manifest) printf 'report\nreport\n' >"$dir/scan-manifest.txt" ;;
+  esac
   set +e
   out=$("$SRC/../security/gate.sh" "$dir" 2>&1)
   status=$?
@@ -62,6 +76,14 @@ check 'empty InstalledVersion fails' fail '{"SchemaVersion":2,"Results":[{"Vulne
 check 'numeric FixedVersion fails' fail '{"SchemaVersion":2,"Results":[{"Vulnerabilities":[{"VulnerabilityID":"CVE-2026-12345","Severity":"LOW","PkgName":"openssl","InstalledVersion":"1.1.1","FixedVersion":12}]}]}'
 check 'malformed JSON fails' fail '{broken'
 check 'HIGH severity with a fix blocks policy' fail "$valid_high"
+check 'missing manifest fails closed' fail "$empty" missing-manifest
+check 'missing target metadata fails closed' fail "$empty" missing-target
+check 'missing scanner versions fail closed' fail "$empty" missing-versions
+check 'missing Syft SBOM fails closed' fail "$empty" missing-sbom
+check 'invalid CycloneDX SBOM fails closed' fail "$empty" invalid-sbom
+check 'missing Trivy report fails closed' fail "$empty" missing-trivy
+check 'unlisted image directory fails closed' fail "$empty" unlisted-directory
+check 'duplicate manifest entry fails closed' fail "$empty" duplicate-manifest
 
 printf '\n%d ok, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
