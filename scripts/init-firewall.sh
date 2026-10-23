@@ -72,12 +72,17 @@ done
 ## COLLECT
 
 # Resolved again at start, because a CDN host moves; the baked list is the floor.
+#
+# The names are resolved together, not one at a time. On a cold resolver each lookup costs from half
+# a second to one and a half, and twenty five of them in a row is fourteen to thirty seconds: past
+# the window a launcher waits for the container to come up, so the start was reported as a bridge
+# that never arrived and the retry, on a warm resolver, took sixteen seconds. Eight at a time with a
+# bounded deadline turns that into about a second. Nothing else about the list changes: only public
+# IPv4 answers reach the set, and an entry that answers nothing is still simply not added.
 domain_ips=
 if [[ -f $ALLOWLIST_DOMAINS ]]; then
-  while read -r domain; do
-    [[ -n "$domain" ]] || continue
-    domain_ips+=$(dig +short A "$domain" 2>/dev/null | grep -E '^[0-9.]+$' || true)$'\n'
-  done < "$ALLOWLIST_DOMAINS"
+  domain_ips=$(xargs -r -P 8 -n 1 dig +short +time=2 +tries=1 A 2>/dev/null <"$ALLOWLIST_DOMAINS" |
+    grep -E '^[0-9.]+$' || true)
 fi
 
 # Fetched because they change often. IPv6 is left out: the set is IPv4.
