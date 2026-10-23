@@ -1055,7 +1055,6 @@ host)
 	if [ "${#tool_host_grants[@]}" -gt 0 ]; then
 		echo -e "  \e[33mNETWORK=host skips the firewall, so a tool's egress grant is not enforced.\e[0m" >&2
 	fi
-	exec "${run[@]}" --network=host "$IMAGE" "$@"
 	# Keep Pi state isolated and drop to node even in host-network mode. This mode skips
 	# firewall setup and receives no extra capabilities.
 	run+=(--network=host --user=0:0 --cap-drop=NET_RAW -e SANDBOX_SKIP_FIREWALL=1 --entrypoint /usr/local/bin/sandbox-entrypoint.sh)
