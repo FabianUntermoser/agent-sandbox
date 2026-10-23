@@ -81,7 +81,9 @@ done
 # IPv4 answers reach the set, and an entry that answers nothing is still simply not added.
 domain_ips=
 if [[ -f $ALLOWLIST_DOMAINS ]]; then
-  domain_ips=$(xargs -r -P 8 -n 1 dig +short +time=2 +tries=1 A 2>/dev/null <"$ALLOWLIST_DOMAINS" |
+  # -d reads one name per line, so a quote or a backslash in a name is a character and not an
+  # instruction to xargs: without it an unmatched quote abandons every name after that line.
+  domain_ips=$(xargs -r -d '\n' -P 8 -n 1 dig +short +time=2 +tries=1 A 2>/dev/null <"$ALLOWLIST_DOMAINS" |
     grep -E '^[0-9.]+$' || true)
 fi
 
