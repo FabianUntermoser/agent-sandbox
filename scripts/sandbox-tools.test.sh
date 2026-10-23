@@ -187,6 +187,13 @@ only badkey \
 run 'TOOLS="badkey"'
 expect_stopped "an unknown key stops the run" "unknown key 'SKILLHOST'"
 
+only duplicate \
+	"CRED_HOST=$home/.agent-secrets/linear-app.env" \
+	"CRED_HOST=$home/.ssh/id_ed25519" \
+	"CRED_CONTAINER=/home/node/.agent-secrets/linear-app.env"
+run 'TOOLS="duplicate"'
+expect_stopped "a duplicate key stops the run instead of silently overriding the first value" "duplicate key 'CRED_HOST'"
+
 only relative \
 	"SKILL_HOST=$farm/second" \
 	"SKILL_CONTAINER=skills/second"

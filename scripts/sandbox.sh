@@ -592,6 +592,7 @@ tool_file=""
 # typo cannot quietly drop a grant.
 tool_read() { # <file>
 	local line key value
+	local -A seen_keys=()
 	TOOL_SKILL_HOST= TOOL_SKILL_CONTAINER= TOOL_CRED_HOST= TOOL_CRED_CONTAINER=
 	TOOL_CLI_HOST= TOOL_CLI_CONTAINER= TOOL_HOSTS=
 	while IFS= read -r line || [ -n "$line" ]; do
@@ -606,10 +607,12 @@ tool_read() { # <file>
 		value=${value#"${value%%[![:space:]]*}"}
 		value=${value%"${value##*[![:space:]]}"}
 		case "$key" in
-		SKILL_HOST|SKILL_CONTAINER|CRED_HOST|CRED_CONTAINER|CLI_HOST|CLI_CONTAINER|HOSTS)
-			[ -n "$value" ] || die "$1: $key has no value" ;;
+		SKILL_HOST|SKILL_CONTAINER|CRED_HOST|CRED_CONTAINER|CLI_HOST|CLI_CONTAINER|HOSTS) ;;
 		*) die "$1: unknown key '$key'" ;;
 		esac
+		[ -z "${seen_keys[$key]+present}" ] || die "$1: duplicate key '$key'"
+		seen_keys["$key"]=1
+		[ -n "$value" ] || die "$1: $key has no value"
 		case "$key" in
 		SKILL_HOST) TOOL_SKILL_HOST=$value ;;
 		SKILL_CONTAINER) TOOL_SKILL_CONTAINER=$value ;;

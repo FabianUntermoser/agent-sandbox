@@ -36,7 +36,9 @@ opts out of it, and `--offline` is the old name for the default bridge plus fire
 - `ollama` opens the host gateway on port 11434. The host ollama binds `127.0.0.1`, so pi's ollama
   models need `NETWORK=host`.
 - `<host>:<port>` opens the addresses that name answers with, on that port alone. The name is
-  resolved when the sandbox starts, because the address behind it moves.
+  resolved when the sandbox starts, because the address behind it moves. If it resolves to no IPv4
+  address, firewall initialization fails before installing any allow rules and the sandbox command
+  does not start.
 
 An answer inside the container's own network or inside any other docker network of the host is
 refused, and so are loopback and the link-local metadata address, so a grant cannot be aimed at a
@@ -149,13 +151,17 @@ mounts what the file names. Nothing in this repo, the image or a launcher knows 
 so a new tool is a new file plus that key: no edit here, no image rebuild.
 
 ```
-SKILL_HOST=~/.agents/skills/linear                     # a directory, read-only
+# The skill directory is mounted read-only.
+SKILL_HOST=~/.agents/skills/linear
 SKILL_CONTAINER=/home/node/.agents/skills/linear
-CRED_HOST=~/.agent-secrets/linear-app.env              # one file, never a directory
+# A credential is mounted as one file, never a directory.
+CRED_HOST=~/.agent-secrets/linear-app.env
 CRED_CONTAINER=/home/node/.agent-secrets/linear-app.env
-CLI_HOST=~/.agents/skills/linear/scripts/linear-api.sh # resolved before mounting, so a
-CLI_CONTAINER=/usr/local/bin/linear-api.sh             # stow-farm link is not followed
-HOSTS=api.linear.app:443                               # egress, resolved at start
+# The CLI is mounted at its resolved host path (not through a stow-farm link).
+CLI_HOST=~/.agents/skills/linear/scripts/linear-api.sh
+CLI_CONTAINER=/usr/local/bin/linear-api.sh
+# Egress is resolved at start.
+HOSTS=api.linear.app:443
 ```
 
 - Every host key needs its `*_CONTAINER`; half a pair stops the run.
@@ -168,9 +174,9 @@ HOSTS=api.linear.app:443                               # egress, resolved at sta
 - Naming the tool is the whole of the opt-in. A catalogue entry nobody names grants nothing, and a
   broken one cannot stop a run that does not ask for it.
 - A destination another grant already holds, a host path without its destination, a destination that
-  is not absolute or that carries a colon or a parent segment, a key with no value, an unknown key,
-  an unknown tool name, a port outside 1..65535 and a name the firewall cannot resolve all stop the
-  run instead of mounting less than was asked for.
+  is not absolute or that carries a colon or a parent segment, duplicate keys, a key with no value,
+  an unknown key, an unknown tool name, a port outside 1..65535 and a name that cannot resolve to an
+  IPv4 address all stop the run instead of silently dropping a requested grant.
 - A tool naming the same file an agent directory already mounts at that path is granted, not a
   collision: `AGENTS="pi"` with `TOOLS="linear"` is the case, and the mount stays read-only.
 - A grant may not reach the vault or a key: the check the base catalogue applies is applied here

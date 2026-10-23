@@ -91,7 +91,12 @@ fi
 # A granted name moves too, so its answer is resolved at every start.
 grant_ips=()
 for svc in "${grants[@]}"; do
-  grant_ips+=("$(dig +short A "${svc%:*}" 2>/dev/null | grep -E '^[0-9.]+$' || true)")
+  addresses=$(dig +short A "${svc%:*}" 2>/dev/null | grep -E '^[0-9.]+$' || true)
+  if [[ -z $addresses ]]; then
+    echo "error: host service '${svc}' did not resolve to an IPv4 address; refusing the grant" >&2
+    exit 1
+  fi
+  grant_ips+=("$addresses")
 done
 
 ## FLUSH

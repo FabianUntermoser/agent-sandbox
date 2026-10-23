@@ -118,6 +118,14 @@ fw tail.example:8317
 chk "the run succeeds" "$rc" "0"
 chk "one rule opens that address on that port" "$(count '-A OUTPUT -d 100.100.1.2 -p tcp --dport 8317 -j ACCEPT')" "1"
 
+printf '  a syntactically valid host that does not resolve\n'
+fw missing.example:8317
+chk "the grant fails closed" "$rc" "1"
+chk "the error identifies the unresolved service" "$(says "host service 'missing.example:8317' did not resolve")" "yes"
+chk "resolution fails before the filter table is flushed" "$(ipt | grep -c -- '^-F$' || true)" "0"
+chk "the EXIT trap leaves DROP policies in place" "$(last_policies)" "$DROP"
+chk "nothing was opened for the unresolved host" "$(ipt | grep -c -- '--dport 8317' || true)" "0"
+
 printf '  answers a grant may not reach\n'
 for refused in own.example:172.18.0.9 sib.example:172.30.0.4 lo.example:127.0.0.1 meta.example:169.254.169.254; do
 	name=${refused%%:*}
