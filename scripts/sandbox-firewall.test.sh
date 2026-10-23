@@ -99,6 +99,15 @@ fetched_before_flush() {
 	[ -n "$flush" ] && [ -n "$last" ] && [ "$last" -lt "$flush" ] && echo yes || echo no
 }
 
+printf '  a domain list read one name per line\n'
+# A name is a name even when it carries a quote or a backslash: the list is read line by line, so
+# neither can swallow the names after it. Each of the three lines gets its own lookup.
+printf 'one.example\nquo"ted.example\ntwo.example\n' >"$T/domains"
+fw
+chk "every line is looked up, quoted or not" "$(grep -c '^dig ' "$T/calls" || true)" "3"
+chk "and the run still succeeds" "$rc" "0"
+printf 'cdn.example\n' >"$T/domains"
+
 printf '  a granted public name\n'
 fw svc.example:8317
 chk "the run succeeds" "$rc" "0"
