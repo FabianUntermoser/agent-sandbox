@@ -28,7 +28,7 @@ ln -s "$(command -v fdfind)" /usr/local/bin/fd
 rm -rf /var/lib/apt/lists/*
 EOT
 
-RUN curl -fsSL https://ollama.com/install.sh | sh
+RUN curl -fsSL https://ollama.com/install.sh | OLLAMA_VERSION=0.34.1 sh
 
 RUN <<EOT
 set -eux
@@ -40,7 +40,7 @@ EOT
 
 RUN <<EOT
 set -eux
-curl -fsSL https://github.com/anthropics/anthropic-cli/releases/download/v1.16.0/ant_1.16.0_linux_amd64.tar.gz \
+curl -fsSL https://github.com/anthropics/anthropic-cli/releases/download/v1.35.0/ant_1.35.0_linux_amd64.tar.gz \
   -o /tmp/ant.tar.gz
 tar -xzf /tmp/ant.tar.gz -C /usr/local/bin ant
 rm /tmp/ant.tar.gz
@@ -48,6 +48,9 @@ EOT
 
 RUN curl -fsSL https://acli.atlassian.com/linux/latest/acli_linux_amd64/acli -o /usr/local/bin/acli \
   && chmod +x /usr/local/bin/acli
+
+# Update npm independently of the npm bundled with the base Node release.
+RUN npm install --global npm@12.1.0
 
 # worktrunk (wt) is pinned here but not installed in the image: this base ships git
 # 2.39 and wt needs 2.43+, so the worker guest (Debian 13) installs it from these two
@@ -89,6 +92,9 @@ ENV PATH=/home/$USERNAME/.local/bin:/home/$USERNAME/.local/pipx/bin:/home/$USERN
     NPM_CONFIG_PREFIX=/home/$USERNAME/.npm-global
 
 RUN pipx install whisper-ctranslate2
+# Pin the fixed transitive Python packages identified by the scan.
+RUN pipx runpip whisper-ctranslate2 install --upgrade \
+  setuptools==78.1.1 urllib3==2.8.0 msgpack==1.2.1
 RUN npm install -g @anthropic-ai/claude-code @earendil-works/pi-coding-agent @openai/codex
 
 USER $USERNAME
