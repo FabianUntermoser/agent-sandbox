@@ -36,6 +36,7 @@ help() {
 		  NETWORK=host               host networking (default: bridge + firewall)
 		  HOST_SERVICES=ollama       open the host gateway on 11434
 		  HOST_SERVICES=name:443     open that name through the host, on that port
+		  TOOLS="linear"             tools granted from ~/.config/agent-sandbox/tools.d, one KEY=value file per tool
 	EOF
 }
 
@@ -61,6 +62,7 @@ NETWORK=bridge
 HOST_SERVICES=
 BASE=
 MOUNTS=()
+TOOLS=
 
 
 ## ARGS
@@ -196,7 +198,7 @@ if [ ! -f "$WORK/$MANIFEST" ] && [ -z "$VERSION_PROBE" ]; then
 	{
 		echo -e "  \e[33mno $MANIFEST: nothing is inherited from the host.\e[0m"
 		echo "  add one with BASE=full for the old defaults, or grant what it needs:"
-		echo "  AGENTS, GIT_AUTH, LOCAL_BIN, TMUX, MOUNTS, NETWORK, HOST_SERVICES"
+		echo "  AGENTS, GIT_AUTH, LOCAL_BIN, TMUX, MOUNTS, NETWORK, HOST_SERVICES, TOOLS"
 	} >&2
 fi
 
@@ -232,7 +234,7 @@ add_mount() {
 	# docker refuses two mounts on one destination, whatever their source or mode
 	# is, so the destination alone is what may appear once
 	[ -n "${_seen_mounts[$dest]:-}" ] && return
-	_seen_mounts[$dest]=1
+	_seen_mounts[$dest]=$src
 	mounts+=(-v "$src:$dest${mode:+:$mode}")
 }
 
@@ -573,6 +575,159 @@ for m in "${MOUNTS[@]}"; do
 	add_mount "$src" "$dest"
 done
 
+# -- Tools (config/tools.d) --------------------------------------------------
+
+# One data file per tool, named by the manifest in TOOLS. The file says what the tool mounts and
+# which hosts its egress may open, so a new tool is a new file and never code: nothing below knows
+# any tool by name. Naming a tool is the whole of the opt-in, so a catalogue entry nobody names
+# grants nothing and cannot break an unrelated run. A tool's directory is mounted read-only at its
+# own guest path, a credential is one file and never a directory, and the egress it names goes into
+# the same read-only grant file HOST_SERVICES uses, which the firewall resolves at start rather
+# than at build time.
+TOOLS_DIR="${TOOLS_DIR:-$HOME/.config/agent-sandbox/tools.d}"
+tool_host_grants=()
+tool_file=""
+
+# A tools.d file is data, never bash: each line is KEY=value and an unknown key is refused, so a
+# typo cannot quietly drop a grant.
+tool_read() { # <file>
+	local line key value
+	local -A seen_keys=()
+	TOOL_SKILL_HOST= TOOL_SKILL_CONTAINER= TOOL_CRED_HOST= TOOL_CRED_CONTAINER=
+	TOOL_CLI_HOST= TOOL_CLI_CONTAINER= TOOL_HOSTS=
+	while IFS= read -r line || [ -n "$line" ]; do
+		case "$line" in '' | '#'*) continue ;; esac
+		case "$line" in
+		*=*) ;;
+		*) die "$1: '$line' is not KEY=value" ;;
+		esac
+		key=${line%%=*}
+		value=${line#*=}
+		key=${key//[[:space:]]/}
+		value=${value#"${value%%[![:space:]]*}"}
+		value=${value%"${value##*[![:space:]]}"}
+		case "$key" in
+		SKILL_HOST|SKILL_CONTAINER|CRED_HOST|CRED_CONTAINER|CLI_HOST|CLI_CONTAINER|HOSTS) ;;
+		*) die "$1: unknown key '$key'" ;;
+		esac
+		[ -z "${seen_keys[$key]+present}" ] || die "$1: duplicate key '$key'"
+		seen_keys["$key"]=1
+		[ -n "$value" ] || die "$1: $key has no value"
+		case "$key" in
+		SKILL_HOST) TOOL_SKILL_HOST=$value ;;
+		SKILL_CONTAINER) TOOL_SKILL_CONTAINER=$value ;;
+		CRED_HOST) TOOL_CRED_HOST=$value ;;
+		CRED_CONTAINER) TOOL_CRED_CONTAINER=$value ;;
+		CLI_HOST) TOOL_CLI_HOST=$value ;;
+		CLI_CONTAINER) TOOL_CLI_CONTAINER=$value ;;
+		HOSTS) TOOL_HOSTS=$value ;;
+		esac
+	done <"$1"
+}
+
+# A host path and its destination are one grant: half a pair mounts nothing and would still read as
+# granted, so either half missing stops the run. A grant the base catalogue already refuses is
+# refused here too, so the keys and the vault stay out of reach of this one path as well.
+tool_host_path() { # <host> <destination> <what>
+	[ -n "$1" ] || [ -n "$2" ] || return 0
+	[ -n "$1" ] && [ -n "$2" ] || die "$tool_file: $3 needs both a host path and a destination"
+	printf '%s' "${1/#\~/$HOME}"
+}
+
+# One mount per destination, and the first one wins. A tool whose destination is already taken
+# would arrive as a name that mounts nothing while the run reports it granted, so it is refused.
+tool_mount() { # <source> <destination> <what>
+	case "$2" in
+	/*) ;;
+	*) die "$tool_file: $3 destination is not an absolute path: $2" ;;
+	esac
+	case "$2" in
+	*:*) die "$tool_file: $3 destination carries a colon, which the mount spec cannot hold: $2" ;;
+	esac
+	case "/$2/" in
+	*/../*) die "$tool_file: $3 destination carries a parent segment: $2" ;;
+	esac
+	# An agent directory granted by AGENTS already puts a link target at its own guest path, and a
+	# tool asking for that same file is the grant already in place. It is replaced rather than
+	# accepted, because a tool grant is read-only and the earlier mount may be writable: narrowing a
+	# view of one file is the whole point, and a different source at that destination is a conflict.
+	if [ -n "${_seen_mounts[$2]:-}" ]; then
+		[ "${_seen_mounts[$2]}" = "$1" ] ||
+			die "$tool_file: $3 cannot mount at $2, that destination already holds ${_seen_mounts[$2]}"
+		drop_mount "$2"
+	fi
+	add_mount "$1" "$2" ro
+}
+
+grant_tool() { # <name>
+	local name=$1 host resolved
+	tool_file="$TOOLS_DIR/$name.conf"
+	tool_read "$tool_file"
+
+	resolved=$(tool_host_path "$TOOL_SKILL_HOST" "$TOOL_SKILL_CONTAINER" "the skill directory")
+	if [ -n "$resolved" ]; then
+		resolved=$(readlink -f "$resolved") || die "$tool_file: the skill directory does not resolve: $TOOL_SKILL_HOST"
+		[ -d "$resolved" ] || die "$tool_file: the skill directory is not a directory: $resolved"
+		denied "$resolved" && die "$tool_file: the skill directory is one the sandbox may not see: $resolved"
+		tool_mount "$resolved" "$TOOL_SKILL_CONTAINER" "the skill directory"
+	fi
+
+	resolved=$(tool_host_path "$TOOL_CRED_HOST" "$TOOL_CRED_CONTAINER" "the credential")
+	if [ -n "$resolved" ]; then
+		resolved=$(readlink -f "$resolved") || die "$tool_file: the credential does not resolve: $TOOL_CRED_HOST"
+		# One file, never a directory: a directory would hand over every key beside the one named.
+		[ -f "$resolved" ] || die "$tool_file: the credential is not a regular file: $resolved"
+		[ -r "$resolved" ] || die "$tool_file: the credential is not readable: $resolved"
+		denied "$resolved" && die "$tool_file: the credential is one the sandbox may not see: $resolved"
+		tool_mount "$resolved" "$TOOL_CRED_CONTAINER" "the credential"
+	fi
+
+	# The host shim is a stow-farm link, which is why the resolved file is what is mounted: the guest
+	# gets the script, never the farm it points into, and the image needs no per-tool copy of it.
+	resolved=$(tool_host_path "$TOOL_CLI_HOST" "$TOOL_CLI_CONTAINER" "the CLI")
+	if [ -n "$resolved" ]; then
+		resolved=$(readlink -f "$resolved") || die "$tool_file: the CLI does not resolve: $TOOL_CLI_HOST"
+		[ -f "$resolved" ] || die "$tool_file: the CLI is not a regular file: $resolved"
+		[ -x "$resolved" ] || die "$tool_file: the CLI is not executable: $resolved"
+		denied "$resolved" && die "$tool_file: the CLI is one the sandbox may not see: $resolved"
+		tool_mount "$resolved" "$TOOL_CLI_CONTAINER" "the CLI"
+	fi
+
+	# The firewall opens a grant only from 1 to 65535, on a name it can resolve, so an entry it would
+	# refuse is refused here instead of failing inside container init.
+	for host in $TOOL_HOSTS; do
+		case "${host%:*}" in
+		"" | [!A-Za-z0-9]* | *[!A-Za-z0-9._-]*)
+			die "$tool_file: '$host' does not name a host the firewall can resolve" ;;
+		esac
+		case "${host##*:}" in
+		"" | *[!0-9]*) die "$tool_file: '$host' is not a <host>:<port> egress grant" ;;
+		esac
+		[ "$((10#${host##*:}))" -ge 1 ] && [ "$((10#${host##*:}))" -le 65535 ] ||
+			die "$tool_file: '$host' needs a TCP port from 1 to 65535"
+		tool_host_grants+=("$host")
+	done
+}
+
+# A name forms a path, so it is held to what a filename may be before anything is read, and a name
+# the catalogue does not hold is refused with the list instead of mounting nothing.
+known_tools() {
+	local found out=""
+	for found in "$TOOLS_DIR"/*.conf; do
+		[ -f "$found" ] || continue
+		out+="$(basename "$found" .conf) "
+	done
+	printf '%s' "${out:-none in $TOOLS_DIR}"
+}
+
+for name in $TOOLS; do
+	case "$name" in
+	"" | [!a-z0-9]* | *[!a-z0-9_-]*) die "a tool name takes lowercase letters, digits, dash or underscore: '$name'" ;;
+	esac
+	[ -f "$TOOLS_DIR/$name.conf" ] || die "unknown tool '$name'; the catalogue has: $(known_tools)"
+	grant_tool "$name"
+done
+
 # Project symlinks are the manifest of what this project needs besides its own
 # tree, so they are followed. The exceptions above are refused and reported.
 SYMLINKS=()
@@ -783,6 +938,10 @@ run=(docker run --rm $TTY_FLAG \
 
 case "$NETWORK" in
 host)
+	# A tool's egress grant is a firewall rule, and host networking has no firewall.
+	if [ "${#tool_host_grants[@]}" -gt 0 ]; then
+		echo -e "  \e[33mNETWORK=host skips the firewall, so a tool's egress grant is not enforced.\e[0m" >&2
+	fi
 	exec "${run[@]}" --network=host "$IMAGE" "$@"
 	;;
 bridge | offline | "")
@@ -818,6 +977,9 @@ bridge | offline | "")
 	{
 		printf '%s\n' "${closed[@]}"
 		printf '%s\n' $HOST_SERVICES | grep -E ':' || true
+		# A tool's egress is a name and a port, resolved when the firewall starts: the image
+		# bakes no per-tool address list, so a new tool needs no rebuild and a host may move.
+		for grant in "${tool_host_grants[@]}"; do printf '%s\n' "$grant"; done
 	} >"$services"
 	fixed_services=$(printf '%s\n' $HOST_SERVICES | grep -v ':' | tr '\n' ' ' || true)
 	run+=(-v "$services:/etc/agent-sandbox-host-services:ro")

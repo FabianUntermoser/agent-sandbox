@@ -28,5 +28,12 @@ chmod +x "$INSTALL_DIR/sandbox.sh" "$INSTALL_DIR/sandbox-panes.sh"
 CONF_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/agent-sandbox"
 mkdir -p "$CONF_DIR"
 \cp "$REPO_DIR/config/base.conf" "$CONF_DIR/base.conf"
+# The tool catalogue: one data file per tool, read at run time and granted by TOOLS in the manifest.
+if [ -d "$REPO_DIR/config/tools.d" ]; then
+	mkdir -p "$CONF_DIR/tools.d"
+	for conf in "$REPO_DIR"/config/tools.d/*.conf; do
+		[ -f "$conf" ] && \cp "$conf" "$CONF_DIR/tools.d/"
+	done
+fi
 
 info "Done. Run 'sandbox.sh' in any project directory."
