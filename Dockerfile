@@ -2,8 +2,8 @@
 # Standalone firewalled dev container for AI agents.
 # Dependencies grouped by agent so you can see what each needs.
 
-ARG NODE_VERSION=22-bookworm
-ARG NODE_DIGEST=sha256:0e5f906573693feaa1e21057ebdcfdb5bd5021f050b2dc7c9deceb629c7da2a8
+ARG NODE_VERSION=24-bookworm-slim
+ARG NODE_DIGEST=sha256:51b1100cc2a83d370c6a60952e3f2989c8a43159d0e38586e090f3b3326efefd
 
 FROM node:${NODE_VERSION}@${NODE_DIGEST}
 
@@ -22,7 +22,7 @@ apt-get install -y --no-install-recommends \
   less git procps sudo fzf zsh man-db unzip gnupg2 \
   ripgrep fd-find jq nano vim ffmpeg tmux \
   python3 python3-pip python3-venv pipx \
-  iptables ipset iproute2 dnsutils ca-certificates curl \
+  iptables ipset iproute2 dnsutils ca-certificates curl util-linux \
   bubblewrap gh zstd rofi xdg-utils
 ln -s "$(command -v fdfind)" /usr/local/bin/fd
 rm -rf /var/lib/apt/lists/*
@@ -73,23 +73,46 @@ RUN chown -R $USERNAME:$USERNAME /home/$USERNAME/.claude
 RUN install -d -o $USERNAME -g $USERNAME /home/$USERNAME/.local/bin
 
 COPY scripts/init-firewall.sh /usr/local/bin/init-firewall.sh
+COPY scripts/sandbox-entrypoint.sh /usr/local/bin/sandbox-entrypoint.sh
 COPY scripts/generate-allowlist.sh /tmp/generate-allowlist.sh
 COPY scripts/public-ip.sh /usr/local/lib/public-ip.sh
-RUN chmod +x /usr/local/bin/init-firewall.sh /tmp/generate-allowlist.sh \
+RUN chmod 0755 /usr/local/bin/init-firewall.sh /usr/local/bin/sandbox-entrypoint.sh /tmp/generate-allowlist.sh \
   && DOMAINS_FILE=/etc/allowlist-domains /tmp/generate-allowlist.sh > /etc/allowlist.sh \
-  && rm /tmp/generate-allowlist.sh \
-  && echo "$USERNAME ALL=(root) NOPASSWD: /usr/local/bin/init-firewall.sh" > /etc/sudoers.d/init-firewall \
-  && chmod 0440 /etc/sudoers.d/init-firewall
+  && rm /tmp/generate-allowlist.sh
 
 # claude: @anthropic-ai/claude-code
 # pi:     @earendil-works/pi-coding-agent
 # codex:  @openai/codex
 ENV PATH=/home/$USERNAME/.local/bin:/home/$USERNAME/.local/pipx/bin:/home/$USERNAME/.npm-global/bin:$PATH \
     PIPX_BIN_DIR=/home/$USERNAME/.local/pipx/bin \
-    NPM_CONFIG_PREFIX=/home/$USERNAME/.npm-global
+    NPM_CONFIG_PREFIX=/home/$USERNAME/.npm-global \
+    AGENT_BROWSER_EXECUTABLE_PATH=/usr/local/bin/chromium-headless-shell
 
 RUN pipx install whisper-ctranslate2
-RUN npm install -g @anthropic-ai/claude-code @earendil-works/pi-coding-agent @openai/codex
+RUN npm install -g @anthropic-ai/claude-code @earendil-works/pi-coding-agent @openai/codex agent-browser@0.39.1
+
+# Browser QA. This base ships neither a browser nor the libraries one needs, and the
+# runtime firewall allows no download, so Playwright installs the full Chromium build and
+# its matching headless_shell here, where the build has network. Playwright uses the full
+# build for its direct test; agent-browser uses headless_shell because the full binary's
+# crashpad handler fails at startup in this container.
+ARG PLAYWRIGHT_VERSION=1.56.1
+ENV PLAYWRIGHT_BROWSERS_PATH=/home/$USERNAME/.cache/ms-playwright
+RUN npm install -g playwright@${PLAYWRIGHT_VERSION} \
+  && npx --yes playwright@${PLAYWRIGHT_VERSION} install --with-deps chromium \
+  && chown -R $USERNAME:$USERNAME /home/$USERNAME/.cache \
+  && ln -sf "$(ls -d /home/$USERNAME/.cache/ms-playwright/chromium-*/chrome-linux/chrome | head -1)" /usr/local/bin/chromium \
+  && headless_shell="$(find /home/$USERNAME/.cache/ms-playwright -type f -path '*/chromium_headless_shell-*/chrome-linux/headless_shell' -print -quit)" \
+  && test -x "$headless_shell" \
+  && ln -sf "$headless_shell" /usr/local/bin/chromium-headless-shell \
+  && ln -sf /usr/local/bin/chromium /usr/local/bin/chromium-browser \
+  && ln -sf /home/$USERNAME/.npm-global/bin/agent-browser /usr/local/bin/agent-browser \
+  && ln -sf /home/$USERNAME/.npm-global/bin/playwright /usr/local/bin/playwright
+
+# The hypa CLI ships as a shim over the package tree the agent mounts, never over a host path: the
+# host shim execs an absolute path under the operator's home, which does not exist in here.
+RUN printf '#!/bin/sh\nexec /home/%s/.pi/agent/npm/node_modules/@hypabolic/hypa-linux-x64/bin/hypa "$@"\n' \
+  "$USERNAME" >/usr/local/bin/hypa && chmod 755 /usr/local/bin/hypa
 
 USER $USERNAME
 WORKDIR /workspace

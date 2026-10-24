@@ -2,13 +2,13 @@
 
 # USAGE: default-deny egress firewall for agent sandbox container
 #
-# The argv carries fixed tokens only. A host:port grant and the closed=<cidr> networks arrive in
-# $SERVICES, a read-only file the launcher wrote, because the user inside the container has sudo
-# for this script.
+# The argv carries fixed service tokens only. A host:port grant and closed=<cidr> networks arrive
+# in $SERVICES, the individual read-only file supplied by the launcher. Only the root entrypoint
+# invokes this helper, before dropping to node; no passwordless sudo entry exposes it to the agent.
 #
 # Two invariants, do not "simplify" them away:
 #  (1) Egress is never open on purpose: the network is read before the flush, DROP is the first call
-#      after it, and an EXIT trap closes a run that fails. The user inside can re-run this script.
+#      after it, and an EXIT trap closes a bootstrap that fails. The unprivileged agent cannot rerun it.
 #  (2) Only the `filter` table is flushed. Flushing `nat` destroys Docker's embedded DNS
 #      (127.0.0.11) and every egress dies with it. Never add `iptables -t nat -F`.
 #
@@ -40,6 +40,8 @@ source "$PUBLIC_IP_LIB"
 SERVICES=${SERVICES:-/etc/agent-sandbox-host-services}
 grants=()
 closed_nets=()
+published_ports=()
+gateway_ports=()
 if [[ -f $SERVICES ]]; then
   while read -r entry; do
     case "$entry" in '' | \#*) continue ;; esac
@@ -49,6 +51,34 @@ if [[ -f $SERVICES ]]; then
         exit 1
       fi
       closed_nets+=("${entry#closed=}")
+      continue
+    fi
+    if [[ $entry == host:* ]]; then
+      port=${entry#host:}
+      if ! [[ $port =~ ^[0-9]{1,5}$ ]]; then
+        echo "error: host grant '$entry' is not a TCP port" >&2
+        exit 1
+      fi
+      port=$((10#$port))
+      if ((port < 1 || port > 65535)); then
+        echo "error: host grant '$entry' is outside 1..65535" >&2
+        exit 1
+      fi
+      gateway_ports+=("$port")
+      continue
+    fi
+    if [[ $entry == published:* ]]; then
+      port=${entry#published:}
+      if ! [[ $port =~ ^[0-9]{1,5}$ ]]; then
+        echo "error: published port '$entry' in $SERVICES is not a TCP port" >&2
+        exit 1
+      fi
+      port=$((10#$port))
+      if ((port < 1 || port > 65535)); then
+        echo "error: published port '$entry' in $SERVICES is outside 1..65535" >&2
+        exit 1
+      fi
+      published_ports+=("$port")
       continue
     fi
     svc_port=${entry##*:}
@@ -64,10 +94,19 @@ fi
 for svc in "$@"; do
   case "$svc" in
   ollama) ;;
-  *) echo "error: unknown argument '$svc', the grant comes from $SERVICES" >&2
+  *) echo "error: unknown argument '$svc', host port grants must come from $SERVICES" >&2
      exit 1 ;;
   esac
 done
+
+# Docker's loopback publisher reaches a bridge-network container from its gateway address. Refuse
+# the grant before changing any rules if that gateway cannot be identified; otherwise allow only
+# that source to reach the declared container TCP ports (not sibling containers on the bridge).
+GW=$(ip route | awk '/^default/ {print $3; exit}')
+if ((${#published_ports[@]} > 0 || ${#gateway_ports[@]} > 0)) && [[ -z $GW ]]; then
+  echo "error: cannot determine the container gateway for declared port grants" >&2
+  exit 1
+fi
 
 ## COLLECT
 
@@ -119,11 +158,15 @@ ipset destroy allowed-domains 2>/dev/null || true
 ## DNS + LOCAL
 
 # DNS (incl. docker embedded resolver) + localhost
-iptables -A OUTPUT -p udp --dport 53 -j ACCEPT
-iptables -A INPUT  -p udp --sport 53 -j ACCEPT
-iptables -A OUTPUT -p tcp --dport 53 -j ACCEPT
-iptables -A INPUT  -p tcp --sport 53 -j ACCEPT
+# Docker's embedded DNS is the only resolver path allowed through the firewall.
+iptables -A OUTPUT -d 127.0.0.11 -p udp --dport 53 -j ACCEPT
+iptables -A INPUT  -s 127.0.0.11 -p udp --sport 53 -j ACCEPT
+iptables -A OUTPUT -d 127.0.0.11 -p tcp --dport 53 -j ACCEPT
+iptables -A INPUT  -s 127.0.0.11 -p tcp --sport 53 -j ACCEPT
 iptables -A INPUT  -i lo -j ACCEPT
+for port in "${published_ports[@]}"; do
+  iptables -A INPUT -s "$GW" -p tcp --dport "$port" -j ACCEPT
+done
 iptables -A OUTPUT -o lo -j ACCEPT
 
 ## ALLOWLIST
@@ -176,7 +219,6 @@ on_closed_net() {
   return 1
 }
 
-GW=$(ip route | awk '/^default/ {print $3; exit}')
 svc_refused=0
 for svc in "$@"; do
   case "$svc" in
@@ -186,6 +228,11 @@ for svc in "$@"; do
     fi
     ;;
   esac
+done
+
+# These gateway ports came from the read-only SERVICES grant file, never from argv.
+for port in "${gateway_ports[@]}"; do
+  iptables -A OUTPUT -d "$GW" -p tcp --dport "$port" -j ACCEPT
 done
 
 for i in "${!grants[@]}"; do

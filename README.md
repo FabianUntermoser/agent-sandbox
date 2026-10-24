@@ -15,12 +15,28 @@ symlinks are not followed, and a target in the vault, `~/.ssh` or `~/.gnupg` is 
 reported.
 - Shell, aliasrc, Claude settings and the CLIs (ollama, glab, ant, acli) are in the image, not
   mounted from the host.
+- Browser QA is installed in the image: Playwright's pinned Chromium and its required shared
+  libraries, including the matching headless shell, are baked in, so no sandbox needs an egress
+  grant to download a browser. `agent-browser` points at the image's
+  `/usr/local/bin/chromium-headless-shell` via `AGENT_BROWSER_EXECUTABLE_PATH`; the image does not
+  globally pass `--no-sandbox`, so Chromium's normal sandbox remains enabled.
+- **Known browser limitation (FAB-243):** Playwright can render the fixture, but `agent-browser`
+  has reported `chrome_crashpad_handler: --database is required` and exits before exposing a
+  DevTools URL. Keep the two paths distinct: `make browser-check` requires Docker and an image and
+  exercises the real browser; a successful static/unit test does not establish an `agent-browser`
+  runtime pass. The browser smoke test has not yet been made a required CI workflow check.
 - Every sandbox runs on its own network, with egress denied by default. [Egress](#egress) covers
   the allowlist, the host services and the ways out of it.
 - `config/base.conf` is the catalogue of what a sandbox may inherit, and `BASE=full` grants the
   whole set. See [What a sandbox inherits](#what-a-sandbox-inherits).
 - Skills come from `.agents/skills/`: with `pi` in `AGENTS` the sandbox mounts `~/.agents`, so pi
   finds the skills the host finds.
+- `HOST_SERVICES=host:<port>` opens one port on the sandbox's own gateway, for a dev server that
+  runs on the host, and needs no name to resolve.
+- `PORTS=("8130:3000")` publishes TCP port 3000 from the sandbox on host loopback port
+  8130. This is the reverse direction: a browser on the host can reach the sandbox's dev server at
+  127.0.0.1:8130. The server should bind to 0.0.0.0 inside the container; the host binding stays
+  on 127.0.0.1 and is not exposed to the LAN.
 - `HOST_SERVICES` opens one named service off the public internet, on a tailnet or on a LAN,
   without host networking. See [Egress](#egress).
 
@@ -39,17 +55,22 @@ opts out of it, and `--offline` is the old name for the default bridge plus fire
   resolved when the sandbox starts, because the address behind it moves. If it resolves to no IPv4
   address, firewall initialization fails before installing any allow rules and the sandbox command
   does not start.
+- `host:<port>` opens only that TCP port on the container's own gateway. It does not resolve a
+  hostname and is accepted only from the launcher-generated, read-only service-grant file.
+- `<host>:<port>` resolves the named host and allows that port only on the resolved public, tailnet
+  or LAN addresses. It is resolved at startup because the address behind a name may move.
 
 An answer inside the container's own network or inside any other docker network of the host is
 refused, and so are loopback and the link-local metadata address, so a grant cannot be aimed at a
 sibling container. A private address outside those networks, the host's own tailnet or LAN address
 among them, opens like any other: that is what the grant is for, and it needs no host networking.
 
-The launcher writes the grant, and the networks it may not reach, into a read-only file the
-container mounts, never into the arguments: the sandbox user has sudo for the firewall script, so
-an argument would let it widen its own egress. A sibling that runs with host networking has no
-IPAM subnet, so this refusal does not cover it. Nothing else on the host or the sandbox network is
-reachable.
+The launcher writes grants and the networks the container may not reach into an individual
+read-only file, never into arguments. A root-only startup entrypoint reads that file, installs the
+firewall before running any agent command, then drops to `node` and removes `NET_ADMIN` and
+`NET_RAW` from the capability bounding set. The agent has no passwordless sudo rule for the
+firewall helper. `NETWORK=host` is an explicit opt-out from that firewall and remains a separate,
+higher-trust mode.
 
 ## Usage
 
@@ -63,19 +84,27 @@ make build
 make setup
 
 # run in any project directory
-make shell                 # interactive shell
-make claude                # Claude Code
-make pi                    # pi coding agent
+make shell                       # explicit interactive shell
+make claude                      # Claude Code
+make pi                          # pi coding agent
+
+# operator commands (no arguments means help)
+sandbox.sh
+sandbox.sh --list                # running sandboxes, including legacy names and agent-sandbox images
+sandbox.sh --list --all          # also show stopped containers Docker retained
+sandbox.sh inspect               # current project's effective Docker config
+sandbox.sh inspect <container>   # inspect a specific container
 
 # or use the script directly
+sandbox.sh shell
 sandbox.sh claude --dangerously-skip-permissions
 sandbox.sh codex
 sandbox.sh pi
-sandbox.sh ollama launch claude   # ollama-managed agent launch
-sandbox.sh --network=host pi       # host network, for the host ollama
+sandbox.sh ollama launch claude  # ollama-managed agent launch
+sandbox.sh --network=host pi     # host network, for the host ollama
 ```
 
-Running `sandbox.sh` again in the same directory reattaches to the existing container. `--new`
+`sandbox.sh shell` reattaches to the existing container in the same directory. `--new`
 forces a fresh one, and `--name <container>` names the container instead of `sandbox-<project>`,
 which is what a caller that runs several containers for one project needs.
 
@@ -87,7 +116,7 @@ mounted at its real host path, which is the key pi uses to find a directory's se
 Claude `--resume` and pi's project key match between host and container.
 
 ```sh
-sandbox.sh                    # container still up: reattaches, tmux layout intact
+sandbox.sh shell              # container still up: reattaches, tmux layout intact
 sandbox.sh pi -c              # container gone: continue the last session of this directory
 sandbox.sh pi -r              # pick a session
 sandbox.sh pi --session <id>  # exact session
@@ -184,7 +213,6 @@ HOSTS=api.linear.app:443
 
 A tool that needs a system package or a daemon is the exception: that is an image layer plus a
 service grant, and it is documented in the tool's own file.
-
 ## Permissions inside the sandbox
 
 Docker is the security boundary, so the agent inside does not stop for approval. `make setup` also
@@ -277,8 +305,10 @@ LOCAL_BIN=true            # ~/.local/bin
 TMUX=true                 # ~/.tmux.conf
 NETWORK=host              # host networking; default is bridge + firewall
 HOST_SERVICES=ollama      # open the host gateway on port 11434
+HOST_SERVICES=host:1313   # or any one port on the gateway, for a dev server on the host
 HOST_SERVICES=name:443    # or one name the host routes to, on that port
 TOOLS="linear"            # tools granted from ~/.config/agent-sandbox/tools.d
+PORTS=("8130:3000")       # host loopback :8130 -> container :3000
 MOUNTS=(                  # extra host paths: "src:dest" per line
   # "/host/path:/container/path"
 )

@@ -6,14 +6,22 @@ set -euo pipefail
 
 prog=${0##*/}
 die() { printf "\e[31merror:\e[0m %s\n" "$*" >&2; exit 1; }
+
+# The grants the firewall has to resolve to an address: anything with a port except the
+# host:<port> token, which names this container's own gateway instead of a name.
+host_service_grants() {
+	printf '%s\n' $HOST_SERVICES | grep -E ':' | grep -vE '^host:[0-9]+$'
+}
 help() {
 	cat <<-EOF
 		$prog, dev container for \$PWD
 
-		  $prog                      interactive shell
+		  $prog shell                interactive shell
 		  $prog <command...>         run any command
 		  $prog claude [args]        Claude Code
 		  $prog pi [args]            pi coding agent
+		  $prog list [--all]         list sandboxes (running by default; --all includes retained stops)
+		  $prog inspect [container]  inspect effective image, network, ports and mounts
 		  --stdio                    stdio straight through, no tmux (paseo provider)
 		  --manifest <path>          manifest to source instead of $PWD/.sandbox.conf; a path
 		                             outside the project lets one run use a generated manifest
@@ -35,10 +43,69 @@ help() {
 		  MOUNTS=(...)               extra host paths
 		  NETWORK=host               host networking (default: bridge + firewall)
 		  HOST_SERVICES=ollama       open the host gateway on 11434
+		  HOST_SERVICES=host:1313    open the host gateway on 1313, no name to resolve
 		  HOST_SERVICES=name:443     open that name through the host, on that port
 		  TOOLS="linear"             tools granted from ~/.config/agent-sandbox/tools.d, one KEY=value file per tool
+		  PORTS=("8130:3000")       publish sandbox TCP 3000 to host 127.0.0.1:8130
+		                             (never exposed to the LAN by default)
 	EOF
 }
+
+
+# Operator commands intentionally run before the project manifest or image is loaded.
+# Inspection reads Docker's effective settings instead of independently re-resolving the manifest.
+if [ "$#" -eq 0 ]; then
+    help
+    exit 0
+fi
+case "$1" in
+    list|--list)
+        shift
+        show_all=
+        if [ "${1:-}" = "--all" ]; then show_all=--all; shift; fi
+        [ "$#" -eq 0 ] || die "list accepts only --all"
+        docker info >/dev/null 2>&1 || die "Docker is unavailable"
+        # Include old default-named sandboxes during migration as well as explicit names
+        # that carry our label. Use delimiter-separated output so project paths may contain spaces.
+        docker ps $show_all --format '{{.Names}}\t{{.Status}}\t{{.Image}}\t{{.Label "agent-sandbox.managed"}}\t{{.Label "agent-sandbox.project"}}' |
+            awk -F '\t' 'BEGIN { printf "%-38s %-16s %-28s %s\n", "NAME", "STATUS", "IMAGE", "PROJECT" }
+                NF >= 3 && ($1 ~ /^sandbox-/ || $4 == "true" || $3 ~ /(^|\/)agent-sandbox([:@]|$)/) {
+                    printf "%-38s %-16s %-28s %s\n", $1, $2, $3, $5
+                }'
+        exit $?
+        ;;
+    inspect|--inspect)
+        shift
+        [ "$#" -le 1 ] || die "inspect accepts at most one container name"
+        target=""
+        if [ "$#" -eq 1 ]; then target="$1"; fi
+        if [ -z "$target" ]; then
+            project="$PWD"
+            candidates="$(docker ps --all --filter label=agent-sandbox.managed=true --filter "label=agent-sandbox.project=$project" --format '{{.Names}}')"
+            if [ -z "$candidates" ]; then
+                derived="sandbox-$(basename "$PWD" | sed 's#[^a-zA-Z0-9_.-]#-#g')"
+                if docker container inspect "$derived" >/dev/null 2>&1; then candidates="$derived"; fi
+            fi
+            [ -n "$candidates" ] || die "no managed sandbox found for $project; use: $prog list --all"
+            [ "$(printf '%s\n' "$candidates" | wc -l)" -eq 1 ] || die "multiple sandboxes for this project; choose one: $candidates"
+            target="$candidates"
+        fi
+        docker container inspect --format '
+name:       {{.Name}}
+status:     {{.State.Status}}
+image:      {{.Config.Image}}
+project:    {{if index .Config.Labels "agent-sandbox.project"}}{{index .Config.Labels "agent-sandbox.project"}}{{else}}legacy / unlabelled{{end}}
+manifest:   {{if index .Config.Labels "agent-sandbox.manifest"}}{{index .Config.Labels "agent-sandbox.manifest"}}{{else}}not recorded{{end}}
+network:    {{.HostConfig.NetworkMode}}
+published:  {{json .HostConfig.PortBindings}}
+cap-add:    {{json .HostConfig.CapAdd}}
+cap-drop:   {{json .HostConfig.CapDrop}}
+mounts:
+{{range .Mounts}}  {{.Source}} -> {{.Destination}} ({{if .RW}}rw{{else}}ro{{end}})
+{{end}}' "$target" || die "cannot inspect container '$target'"
+        exit 0
+        ;;
+esac
 
 ## DEFAULTS
 
@@ -63,6 +130,7 @@ HOST_SERVICES=
 BASE=
 MOUNTS=()
 TOOLS=
+PORTS=()
 
 
 ## ARGS
@@ -113,6 +181,7 @@ case "${1:-}" in
 	"")        set -- zsh ;;
 	claude)    set -- claude --dangerously-skip-permissions "${@:2}" ;;
 	pi)        set -- bash -c 'export PATH=$HOME/.npm-global/bin:$PATH; exec pi "$@"' bash "${@:2}" ;;
+	shell)     set -- zsh ;;
 	ollama)    set -- bash -c 'export PATH=$HOME/.npm-global/bin:$PATH; exec ollama "$@"' bash "${@:2}" ;;
 esac
 if [ -z "$VERBOSE" ] && [ -z "$STDIO" ]; then
@@ -151,23 +220,9 @@ fi
 
 # -- Pi project trust --------------------------------------------------------
 
-# pi asks for project trust the first time it runs in a directory that holds
-# project resources. The sandbox mounts the project at its own path, so writing
-# that path into the trust store here means the container inherits the decision
-# instead of stopping at the prompt.
-seed_pi_trust() {
-	[ "$SESSION" = pi ] || return 0
-	case " ${*:-} " in *" -na "*|*" --no-approve "*) return 0 ;; esac
-	local store="${PI_TRUST_FILE:-$HOME/.pi/agent/trust.json}"
-	command -v jq >/dev/null 2>&1 || return 0
-	[ "$(jq -r --arg w "$WORK" '.[$w] // empty' "$store" 2>/dev/null)" = true ] && return 0
-	mkdir -p "${store%/*}"
-	[ -f "$store" ] || echo '{}' >"$store"
-	jq --arg w "$WORK" '. + {($w): true}' "$store" >"$store.tmp" || { rm -f "$store.tmp"; return 0; }
-	mv "$store.tmp" "$store"
-	echo "pi: trusted '$WORK', project resources may load" >&2
-}
-seed_pi_trust "$@"
+# Project trust and the unattended policy are staged by the container entrypoint into the
+# disposable per-container Pi agent directory. Never write trust or policy to the persistent
+# host/project tree from this launcher.
 
 # Load the manifest. The project's own may be absent; one the caller named must be readable, since
 # a run that quietly loses the grants it was asked for is worse than one that stops here.
@@ -546,19 +601,28 @@ while read -r kind path opts; do
 	# What links deeper is runtime state, codex's arg0 shims sit at depth 5, and it stays out.
 	if [ -n "$agent" ] && [ "$kind" = dir ]; then
 		[ "${#follow_roots[@]}" -gt 0 ] || echo -e "  \e[33m${BASE_CONF} declares no follow root, so no link under an agent directory is followed.\e[0m" >&2
+		# An agent directory may itself be a link into the checkout, and `find` does not descend into
+		# a path that is a link: the whole tree then reads as "no links", which is how 58 authored
+		# skills stayed dangling while their names still listed. The walk starts at the resolved
+		# directory; the destination is rebuilt from this catalogue entry, never from the physical
+		# path, so each link keeps the guest path it already occupies.
+		walk=$(readlink -f "$path" 2>/dev/null || true)
+		[ -n "$walk" ] && [ -d "$walk" ] || walk=$path
+		prefix="/home/$RUSER/${path#"$HOME"/}"
 		while IFS= read -r -d '' link; do
+			rel=${link#"$walk"/}
 			target=$(readlink -f "$link") || continue
 			[ -n "$target" ] && [ -e "$target" ] || continue
 			if denied "$target"; then
-				echo "  link not followed (the vault, or a key): ${link#"$path"/} -> $target" >&2
+				echo "  link not followed (the vault, or a key): $rel -> $target" >&2
 				continue
 			fi
 			if ! inside_follow_root "$target"; then
-				echo "  link not followed (outside every follow root): ${link#"$path"/} -> $target" >&2
+				echo "  link not followed (outside every follow root): $rel -> $target" >&2
 				continue
 			fi
-			add_mount "$target" "/home/$RUSER/${link#"$HOME"/}"
-		done < <(find "$path" -maxdepth 3 -type l -print0 2>/dev/null)
+			add_mount "$target" "$prefix/$rel" ro
+		done < <(find "$walk" -maxdepth 3 -type l -print0 2>/dev/null)
 	fi
 done <"$BASE_CONF"
 
@@ -919,6 +983,40 @@ fi
 
 validate_mounts
 
+# A manifest may publish TCP ports back to the host. The host side is always loopback;
+# broad host interfaces are not grantable through this shortcut. The mapping is host:container.
+port_publish_args=()
+published_container_ports=()
+declare -A _seen_host_ports=() _seen_container_ports=()
+for mapping in "${PORTS[@]}"; do
+    if [[ "$mapping" =~ ^([0-9]{1,5}):([0-9]{1,5})$ ]]; then
+        host_raw="${BASH_REMATCH[1]}"
+        container_raw="${BASH_REMATCH[2]}"
+    else
+        die "invalid PORTS entry '$mapping' (expected host:container, e.g. 8130:3000)"
+    fi
+    host_port=$((10#$host_raw))
+    container_port=$((10#$container_raw))
+    (( host_port >= 1 && host_port <= 65535 )) || die "invalid host port in PORTS entry '$mapping'"
+    (( container_port >= 1 && container_port <= 65535 )) || die "invalid container port in PORTS entry '$mapping'"
+    [ -z "${_seen_host_ports[$host_port]:-}" ] || die "host port $host_port is published more than once"
+    _seen_host_ports[$host_port]=1
+    if [ -z "${_seen_container_ports[$container_port]:-}" ]; then
+        _seen_container_ports[$container_port]=1
+        published_container_ports+=("$container_port")
+    fi
+    port_publish_args+=(--publish "127.0.0.1:${host_port}:${container_port}/tcp")
+done
+if [ "${#port_publish_args[@]}" -gt 0 ] && [ "$NETWORK" = host ]; then
+    die "PORTS cannot be combined with NETWORK=host; publish a loopback port from a bridge network instead"
+fi
+if [ "${#port_publish_args[@]}" -gt 0 ]; then
+    # Before Engine 28.0.0 a host on the same LAN can route to a port published on 127.0.0.1.
+    engine=$(docker version --format '{{.Server.Version}}' 2>/dev/null) || engine=""
+    [[ $engine =~ ^([0-9]+)\. ]] && (( 10#${BASH_REMATCH[1]} >= 28 )) ||
+        die "PORTS needs Docker Engine 28.0.0 or newer (got '${engine:-unknown}')"
+fi
+
 TTY_FLAG="-t"
 if [ -n "$STDIO" ]; then
 	# pipes, not a tty: a tty echoes the request stream and rewrites its endings
@@ -927,14 +1025,29 @@ elif [ -t 0 ]; then
 	TTY_FLAG="-it"
 fi
 
+# A sandbox commits as its operator. The generated config holds only the identity and the excludes
+# file, never a credential helper, so pointing git at it does not hand over a forge token the way
+# mounting the operator's own ~/.gitconfig would. A project's .git/config still wins over it.
+git_config="$HOME/.config/agent-sandbox/gitconfig"
+git_env=()
+[ -f "$git_config" ] && git_env+=(-e "GIT_CONFIG_GLOBAL=/home/$RUSER/.config/agent-sandbox/gitconfig")
+
 run=(docker run --rm $TTY_FLAG \
 	--name "$NAME" \
+	--label agent-sandbox.managed=true \
+	--label "agent-sandbox.project=$WORK" \
+	--label "agent-sandbox.manifest=$manifest_path" \
 	--hostname sandbox \
 	-e "COLORTERM=${COLORTERM:-truecolor}" \
 	-e DISABLE_AUTOUPDATER=1 \
 	-e DISABLE_TELEMETRY=1 \
+	"${git_env[@]}" \
 	-w "$WORK" \
 	"${mounts[@]}")
+run+=("${port_publish_args[@]}")
+# Docker-configured path also reaches later docker exec processes in the same container.
+run+=(-e "PI_CODING_AGENT_DIR=/tmp/agent-sandbox-pi-agent-$NAME")
+run+=(-e "SANDBOX_SESSION=$SESSION")
 
 case "$NETWORK" in
 host)
@@ -942,7 +1055,10 @@ host)
 	if [ "${#tool_host_grants[@]}" -gt 0 ]; then
 		echo -e "  \e[33mNETWORK=host skips the firewall, so a tool's egress grant is not enforced.\e[0m" >&2
 	fi
-	exec "${run[@]}" --network=host "$IMAGE" "$@"
+	# Keep Pi state isolated and drop to node even in host-network mode. This mode skips
+	# firewall setup and receives no extra capabilities.
+	run+=(--network=host --user=0:0 --cap-drop=NET_RAW -e SANDBOX_SKIP_FIREWALL=1 --entrypoint /usr/local/bin/sandbox-entrypoint.sh)
+	exec "${run[@]}" "$IMAGE" -- "$@"
 	;;
 bridge | offline | "")
 	# One dedicated network for every sandbox: the default bridge is shared with
@@ -962,8 +1078,9 @@ bridge | offline | "")
 		closed+=("closed=$subnet")
 	done < <(printf '%s\n' "$subnets" | tr ' ' '\n' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+/[0-9]+$' | sort -u)
 	if [ ${#closed[@]} -eq 0 ]; then
-		# The guard a <host>:<port> grant rests on cannot be drawn without them.
-		if printf '%s\n' $HOST_SERVICES | grep -q ':'; then
+		# The guard a <host>:<port> grant rests on cannot be drawn without them. A host:<port>
+		# token names the gateway itself and resolves nothing, so it does not need the guard.
+		if host_service_grants | grep -q ':'; then
 			die "no docker network has a subnet, so a <host>:<port> grant could reach a sibling container"
 		fi
 		echo -e "  \e[33mno docker network has a subnet, so a grant could reach a sibling container.\e[0m" >&2
@@ -976,12 +1093,22 @@ bridge | offline | "")
 		die "cannot create the grant file in $services_dir"
 	{
 		printf '%s\n' "${closed[@]}"
-		printf '%s\n' $HOST_SERVICES | grep -E ':' || true
+		# A name:port grant resolves at start, so it goes in the file. A host:port grant names the
+		# gateway itself and travels in the argv below, which is why it is filtered out here.
+		host_service_grants | grep -E ':' || true
 		# A tool's egress is a name and a port, resolved when the firewall starts: the image
 		# bakes no per-tool address list, so a new tool needs no rebuild and a host may move.
 		for grant in "${tool_host_grants[@]}"; do printf '%s\n' "$grant"; done
+		for port in "${published_container_ports[@]}"; do printf 'published:%s\n' "$port"; done
 	} >"$services"
-	fixed_services=$(printf '%s\n' $HOST_SERVICES | grep -v ':' | tr '\n' ' ' || true)
+	fixed_service_args=()
+	for service in $HOST_SERVICES; do
+		case "$service" in
+		*:) die "invalid empty host service: $service" ;;
+		*:* ) ;; # name:port and host:port are supplied only through the grant file
+		*) fixed_service_args+=("$service") ;;
+		esac
+	done
 	run+=(-v "$services:/etc/agent-sandbox-host-services:ro")
 	if [ -n "$HOST_SERVICES" ]; then
 		run+=(--add-host=host.docker.internal:host-gateway)
@@ -992,10 +1119,11 @@ bridge | offline | "")
 		esac
 	fi
 	exec "${run[@]}" \
-		--cap-add=NET_ADMIN --cap-add=NET_RAW \
-		--entrypoint /bin/bash \
+		--user=0:0 \
+		--cap-add=NET_ADMIN --cap-drop=NET_RAW \
+		--entrypoint /usr/local/bin/sandbox-entrypoint.sh \
 		"$IMAGE" \
-		-c "sudo /usr/local/bin/init-firewall.sh $fixed_services && exec \"\$@\"" bash "$@"
+		"${fixed_service_args[@]}" -- "$@"
 	;;
 *)
 	die "unknown NETWORK '$NETWORK' (bridge or host)"
