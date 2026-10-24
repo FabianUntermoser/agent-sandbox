@@ -14,9 +14,8 @@ REPO_DIR="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
 
 ## MAIN
 
-info "Building image '$IMAGE'..."
 cd "$REPO_DIR"
-docker buildx bake --load
+IMAGE="$IMAGE" "$REPO_DIR/scripts/image-build.sh"
 
 INSTALL_DIR="${HOME}/.local/bin"
 mkdir -p "$INSTALL_DIR"

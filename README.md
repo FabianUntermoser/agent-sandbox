@@ -77,8 +77,9 @@ higher-trust mode.
 **Prerequisites:** Docker with BuildKit, Linux with iptables.
 
 ```sh
-# build image
+# build image: a candidate tag first, latest moves only once it starts as node
 make build
+make rollback                    # latest back to the image it replaced
 
 # one-time setup (installs sandbox.sh and base.conf)
 make setup

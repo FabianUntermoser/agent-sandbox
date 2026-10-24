@@ -1,5 +1,8 @@
 build:
-	docker buildx bake --load
+	./scripts/image-build.sh
+
+rollback:
+	./scripts/image-build.sh --rollback
 
 check:
 	bash -n scripts/*.sh
@@ -13,6 +16,7 @@ check:
 	./scripts/sandbox-git-fence.test.sh
 	./scripts/sandbox-firewall.test.sh
 	./scripts/sandbox-permission-policy.test.sh
+	./scripts/image-build.test.sh
 
 # Real container: the browser is what it proves, so it needs docker and the image.
 browser-check:
