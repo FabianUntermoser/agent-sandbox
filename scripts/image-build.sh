@@ -11,10 +11,8 @@ help() {
 	cat <<EOF
 Usage: ${0##*/} [--rollback]
 
-  (none)      build $IMAGE:build-<commit>, start it once through the entrypoint, and only when it
-              drops to $RUSER move $IMAGE:latest to it. The image latest pointed at before is kept
-              as $IMAGE:previous.
-  --rollback  point $IMAGE:latest back at $IMAGE:previous
+  (none)      build a candidate, promote it to latest once it starts as $RUSER, keep the old as previous
+  --rollback  point latest back at previous
 EOF
 }
 
@@ -44,13 +42,10 @@ commit="$(git -C "$REPO_DIR" rev-parse --short HEAD 2>/dev/null || echo unknown)
 git -C "$REPO_DIR" diff --quiet HEAD 2>/dev/null || commit="$commit-dirty"
 candidate="$IMAGE:build-$commit"
 
-# Bake writes only the tag it is given, so latest and the image it names survive a failed build.
 info "Building $candidate..."
 cd "$REPO_DIR"
 TAG="build-$commit" docker buildx bake --load
 
-# The entrypoint is what a sandbox runs first and what the launcher and image must agree on.
-# SANDBOX_SKIP_FIREWALL keeps the check off the network; the firewall has its own suite.
 user="$(docker run --rm --user 0:0 -e SANDBOX_SKIP_FIREWALL=1 \
 	--entrypoint /usr/local/bin/sandbox-entrypoint.sh "$candidate" -- id -un 2>&1 | tail -1)" || true
 [ "$user" = "$RUSER" ] || die "$candidate did not start as $RUSER (got: $user); $IMAGE:latest is untouched"

@@ -13,8 +13,7 @@ work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 mkdir -p "$work/bin" "$work/tags"
 
-# docker is stubbed with a tag store: one file per tag holding the image id it names. A build
-# writes NEW_ID under the tag bake is given, and a run answers as RUN_USER.
+# Stub: one file per tag holding its image id.
 cat >"$work/bin/docker" <<EOF
 #!/usr/bin/env bash
 tags="$work/tags"
