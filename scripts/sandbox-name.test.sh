@@ -115,6 +115,16 @@ expect no "$(got '--cap-add=NET_ADMIN')" 'host mode receives no NET_ADMIN'
 expect no "$(got '--cap-add=NET_RAW')" 'host mode receives no NET_RAW'
 expect yes "$(got 'PI_CODING_AGENT_DIR=/tmp/agent-sandbox-pi-agent-sandbox-'$project)" 'host mode gets a stable per-container Pi state path'
 
+printf '  both network modes hand the command its own home\n'
+# The entrypoint derives the Pi agent directory and the permission policy from $HOME before it
+# drops privileges, so a root home means a root path in either mode. One shared argument, asserted
+# in both, is the point of this case.
+printf 'MOUNTS=()\n' >"$work/bridge-home.conf"
+run --manifest "$work/bridge-home.conf" || true
+expect yes "$(got 'HOME=/home/node')" 'bridge mode hands the command its own home'
+run --manifest "$host_manifest" || true
+expect yes "$(got 'HOME=/home/node')" 'host mode hands the command its own home'
+
 printf '  no arguments shows help rather than launching a shell\n'
 if (cd "$work" && PATH="$stub:$PATH" "$SRC/sandbox.sh") >"$work/out" 2>&1 &&
 	grep -q 'interactive shell' "$work/out" &&

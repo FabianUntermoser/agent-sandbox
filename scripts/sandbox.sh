@@ -1032,6 +1032,10 @@ git_config="$HOME/.config/agent-sandbox/gitconfig"
 git_env=()
 [ -f "$git_config" ] && git_env+=(-e "GIT_CONFIG_GLOBAL=/home/$RUSER/.config/agent-sandbox/gitconfig")
 
+# $HOME is the one variable both network modes need and neither used to set: the entrypoint runs as
+# root, drops the command to $RUSER, and derives the Pi agent directory and the permission policy
+# from $HOME before that drop. Left at /root, every path a command resolves through $HOME (the Pi
+# state, a tool's credential) is looked for where nothing was mounted.
 run=(docker run --rm $TTY_FLAG \
 	--name "$NAME" \
 	--label agent-sandbox.managed=true \
@@ -1041,6 +1045,7 @@ run=(docker run --rm $TTY_FLAG \
 	-e "COLORTERM=${COLORTERM:-truecolor}" \
 	-e DISABLE_AUTOUPDATER=1 \
 	-e DISABLE_TELEMETRY=1 \
+	-e "HOME=/home/$RUSER" \
 	"${git_env[@]}" \
 	-w "$WORK" \
 	"${mounts[@]}")
@@ -1118,12 +1123,8 @@ bridge | offline | "")
 			;;
 		esac
 	fi
-	# The entrypoint drops to $RUSER, so the command has to read its home from the drop and not from
-	# the root shell that bootstrapped the firewall: every path a tool resolves through $HOME is
-	# otherwise looked for under /root, where nothing was mounted.
 	exec "${run[@]}" \
 		--user=0:0 \
-		-e "HOME=/home/$RUSER" \
 		--cap-add=NET_ADMIN --cap-drop=NET_RAW \
 		--entrypoint /usr/local/bin/sandbox-entrypoint.sh \
 		"$IMAGE" \
