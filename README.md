@@ -79,6 +79,7 @@ higher-trust mode.
 ```sh
 # build image
 make build
+make rollback                    # latest back to the previous image
 
 # one-time setup (installs sandbox.sh and base.conf)
 make setup
