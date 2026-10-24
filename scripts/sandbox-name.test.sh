@@ -72,8 +72,8 @@ expect yes "$(got "sandbox-$project")" "the container is named after the project
 expect yes "$(got '--user=0:0')" 'firewall bootstrap runs as root only at startup'
 expect yes "$(got '/usr/local/bin/sandbox-entrypoint.sh')" 'the dedicated entrypoint owns bootstrap and capability drop'
 expect yes "$(got '--cap-add=NET_ADMIN')" 'NET_ADMIN is granted only for firewall bootstrap'
-expect no "$(got '--cap-add=NET_RAW')" 'NET_RAW is never granted to the bootstrap container'
 expect yes "$(got '--cap-drop=NET_RAW')" 'NET_RAW is removed from Docker capability defaults'
+expect yes "$(got '--cap-add=NET_RAW')" 'and granted back for the bootstrap, where ipset opens its socket'
 expect yes "$(got '--')" 'the agent command is separated from trusted service grants'
 expect no "$(got '/bin/bash')" 'the launcher no longer runs an agent shell as the privileged bootstrap command'
 
