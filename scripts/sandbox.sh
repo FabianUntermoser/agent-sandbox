@@ -1123,9 +1123,14 @@ bridge | offline | "")
 			;;
 		esac
 	fi
+	# The bootstrap needs NET_RAW as well as NET_ADMIN: ipset opens its netlink socket with it and
+	# refuses with "Can't open socket to ipset" without. It is dropped from the defaults above and
+	# granted back here, so it exists only for the bootstrap; the entrypoint removes NET_ADMIN and
+	# NET_RAW from the bounding, inheritable and ambient sets before the agent runs, which is the
+	# property that matters and what sandbox-entrypoint.test.sh asserts.
 	exec "${run[@]}" \
 		--user=0:0 \
-		--cap-add=NET_ADMIN --cap-drop=NET_RAW \
+		--cap-add=NET_ADMIN --cap-drop=NET_RAW --cap-add=NET_RAW \
 		--entrypoint /usr/local/bin/sandbox-entrypoint.sh \
 		"$IMAGE" \
 		"${fixed_service_args[@]}" -- "$@"
