@@ -1118,8 +1118,12 @@ bridge | offline | "")
 			;;
 		esac
 	fi
+	# The entrypoint drops to $RUSER, so the command has to read its home from the drop and not from
+	# the root shell that bootstrapped the firewall: every path a tool resolves through $HOME is
+	# otherwise looked for under /root, where nothing was mounted.
 	exec "${run[@]}" \
 		--user=0:0 \
+		-e "HOME=/home/$RUSER" \
 		--cap-add=NET_ADMIN --cap-drop=NET_RAW \
 		--entrypoint /usr/local/bin/sandbox-entrypoint.sh \
 		"$IMAGE" \
