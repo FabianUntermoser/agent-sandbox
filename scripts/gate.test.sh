@@ -85,5 +85,34 @@ check 'missing Trivy report fails closed' fail "$empty" missing-trivy
 check 'unlisted image directory fails closed' fail "$empty" unlisted-directory
 check 'duplicate manifest entry fails closed' fail "$empty" duplicate-manifest
 
+printf 'gate: deduplicate repeated findings across three application images\n'
+multi="$T/multi-image"
+mkdir -p "$multi"
+printf 'app-one\napp-two\napp-three\n' >"$multi/scan-manifest.txt"
+for image in app-one app-two app-three; do
+  mkdir -p "$multi/$image"
+  severity=HIGH
+  [ "$image" != app-three ] || severity=CRITICAL
+  printf '{"SchemaVersion":2,"Results":[{"Target":"base","Vulnerabilities":[{"VulnerabilityID":"CVE-2026-54321","Severity":"%s","PkgName":"openssl","InstalledVersion":"1.1.1","FixedVersion":"1.1.2"}]}]}\n' "$severity" >"$multi/$image/trivy.json"
+  printf '%s sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa test-commit build\n' "$image" >"$multi/$image/scan-target.txt"
+  printf 'Trivy test version\nSyft test version\n' >"$multi/$image/scanner-versions.txt"
+  printf '{"bomFormat":"CycloneDX","specVersion":"1.5","version":1,"components":[]}\n' >"$multi/$image/syft.cdx.json"
+done
+set +e
+multi_out=$("$SRC/../security/gate.sh" "$multi" 2>&1)
+multi_status=$?
+set -e
+if [ "$multi_status" -ne 0 ] \
+  && grep -q '1 unique; 3 image-level occurrences; 2 duplicate occurrence(s) suppressed' <<<"$multi_out" \
+  && [ "$(grep -c 'CVE-2026-54321' <<<"$multi_out")" -eq 1 ] \
+  && grep -q 'CRITICAL CVE-2026-54321 openssl 1.1.1 -> 1.1.2 \[images: app-one (HIGH), app-three (CRITICAL), app-two (HIGH)\]' <<<"$multi_out"; then
+  printf '  ok    same CVE across three images is reported once without hiding affected images\n'
+  pass=$((pass + 1))
+else
+  printf '  FAIL  three-image deduplication (exit %s)\n' "$multi_status" >&2
+  printf '%s\n' "$multi_out" | tail -8 | sed 's/^/        /' >&2
+  fail=$((fail + 1))
+fi
+
 printf '\n%d ok, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

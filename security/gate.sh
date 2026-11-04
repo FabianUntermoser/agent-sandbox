@@ -15,6 +15,13 @@ die() { err "$*"; exit 1; }
 
 command -v jq >/dev/null || die "jq is required"
 
+# Aggregate blocking findings across all images in this run. A repeated CVE/package/version tuple
+# is reported once with every affected image, but every image is still evaluated by the policy.
+tmp_dir=$(mktemp -d)
+trap 'rm -rf "$tmp_dir"' EXIT
+blocking_jsonl="$tmp_dir/blocking-findings.jsonl"
+: >"$blocking_jsonl"
+
 # A report is readable only when it carries the shape Trivy writes. Anything else fails the gate,
 # a valid JSON file with a result entry of an unexpected type included: a report nobody can
 # validate must never collapse into a clean image. "Results": null is what Trivy writes for an
@@ -46,7 +53,7 @@ manifest="$dir/scan-manifest.txt"
 [ -s "$manifest" ] || die "no scan manifest under $dir, refusing to pass"
 blocked=0
 found=0
-total=0
+occurrences=0
 declare -A seen=()
 while IFS= read -r image || [ -n "$image" ]; do
 	[[ "$image" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || die "invalid image name in scan manifest: $image"
@@ -83,12 +90,23 @@ while IFS= read -r image || [ -n "$image" ]; do
 	printf '  trivy  sev: %s  blocking: %s\n' "${severities:-none}" "$fixable"
 
 	if [ "$fixable" -gt 0 ]; then
-		printf '%s\n' '  blocked:'
-		jq -r '.Results[]?.Vulnerabilities[]?
-			| select((.Severity == "HIGH" or .Severity == "CRITICAL") and ((.FixedVersion // "") | length > 0))
-			| "    \(.Severity) \(.VulnerabilityID) \(.PkgName) \(.InstalledVersion) -> \(.FixedVersion)"' "$report"
 		blocked=1
-		total=$((total + fixable))
+		occurrences=$((occurrences + fixable))
+		# Key findings by advisory plus package identity/version and fix version. Keep the app/image
+		# on each row so the final report can deduplicate without hiding deployment exposure.
+		jq -c --arg image "$image" '
+			.Results[]?.Vulnerabilities[]?
+			| select((.Severity == "HIGH" or .Severity == "CRITICAL") and ((.FixedVersion // "") | length > 0))
+			| {
+				key: ([.VulnerabilityID, (.PkgIdentifier.PURL // ((.PkgType // "") + ":" + .PkgName)), .PkgName, .InstalledVersion, (.FixedVersion // "")] | @json),
+				severity: .Severity,
+				id: .VulnerabilityID,
+				package: .PkgName,
+				installed: .InstalledVersion,
+				fixed: (.FixedVersion // ""),
+				image: $image
+			}
+		' "$report" >>"$blocking_jsonl"
 	fi
 done < "$manifest"
 
@@ -100,12 +118,31 @@ for image_dir in "$dir"/*; do
 done
 
 if [ "$blocked" -ne 0 ]; then
+	unique=$(jq -s 'group_by(.key) | length' "$blocking_jsonl")
+	suppressed=$((occurrences - unique))
+	printf 'Blocking findings: %s unique; %s image-level occurrences; %s duplicate occurrence(s) suppressed\n' \
+		"$unique" "$occurrences" "$suppressed"
+	jq -s -r '
+		group_by(.key)
+		| map({
+			severity: (if any(.[]; .severity == "CRITICAL") then "CRITICAL" else "HIGH" end),
+			id: .[0].id,
+			package: .[0].package,
+			installed: .[0].installed,
+			fixed: .[0].fixed,
+			images: (map({image, severity}) | unique_by(.image))
+		})
+		| sort_by(.severity, .id, .package)
+		| .[]
+		| "  \(.severity) \(.id) \(.package) \(.installed) -> \(.fixed) [images: \([.images[] | "\(.image) (\(.severity))"] | join(", "))]"
+	' "$blocking_jsonl"
 	if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
-		printf 'Security gate: %s fixable HIGH/CRITICAL finding(s), listed above in the job log.\n' \
-			"$total" >>"$GITHUB_STEP_SUMMARY"
+		printf 'Security gate: %s unique fixable HIGH/CRITICAL finding(s) across %s image-level occurrence(s); %s duplicate occurrence(s) suppressed.\n' \
+			"$unique" "$occurrences" "$suppressed" >>"$GITHUB_STEP_SUMMARY"
 	fi
 	if [ -n "${GITHUB_ACTIONS:-}" ]; then
-		printf '::error title=Security gate::%s fixable HIGH/CRITICAL finding(s)\n' "$total"
+		printf '::error title=Security gate::%s unique fixable HIGH/CRITICAL finding(s) across %s image-level occurrence(s)\n' \
+			"$unique" "$occurrences"
 	fi
 	die "policy exceeded"
 fi

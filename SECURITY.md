@@ -40,6 +40,17 @@ The gate reads the reports in a job of its own and is the only thing that fails 
 finding, so a blocked run keeps its evidence. A report the gate cannot read fails it: an empty,
 truncated or missing file is not a clean image.
 
+When one run scans multiple images, the gate deduplicates its blocking-finding output by advisory
+ID, package name, installed version and fixed version. It prints each unique finding once and lists
+every affected image; the gate still evaluates each image independently, so a repeated finding is
+not ignored or allowed through. The summary distinguishes unique findings from image-level
+occurrences. This reduces noisy repeated reports without losing which app images are affected.
+
+Repository-level GitHub dependency alerts and code scanning are complementary to this check. The
+Trivy scan is retained for the actual built image, including OS packages and dependencies installed
+during the Docker build that may not be represented by repository manifests. Syft remains the one
+SBOM generator in this pipeline.
+
 No exceptions are in force. A temporary one needs its reason and its expiry date in this file, in
 the same commit as the exception.
 
