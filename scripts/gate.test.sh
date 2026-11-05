@@ -114,5 +114,35 @@ else
   fail=$((fail + 1))
 fi
 
+printf 'gate: every image in the manifest is evaluated\n'
+two="$T/two-images"
+mkdir -p "$two"
+printf 'agent-sandbox\nnode-base\n' >"$two/scan-manifest.txt"
+for image in agent-sandbox node-base; do
+  cve=CVE-2026-11111
+  [ "$image" != node-base ] || cve=CVE-2026-22222
+  mkdir -p "$two/$image"
+  printf '{"SchemaVersion":2,"Results":[{"Target":"base","Vulnerabilities":[{"VulnerabilityID":"%s","Severity":"HIGH","PkgName":"openssl","InstalledVersion":"1.1.1","FixedVersion":"1.1.2"}]}]}\n' "$cve" >"$two/$image/trivy.json"
+  printf '%s sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa test-commit build\n' "$image" >"$two/$image/scan-target.txt"
+  printf 'Trivy test version\nSyft test version\n' >"$two/$image/scanner-versions.txt"
+  printf '{"bomFormat":"CycloneDX","specVersion":"1.5","version":1,"components":[]}\n' >"$two/$image/syft.cdx.json"
+done
+set +e
+two_out=$("$SRC/../security/gate.sh" "$two" 2>&1)
+two_status=$?
+set -e
+if [ "$two_status" -ne 0 ] \
+  && grep -q '^agent-sandbox  target=' <<<"$two_out" \
+  && grep -q '^node-base  target=' <<<"$two_out" \
+  && grep -q 'CVE-2026-11111' <<<"$two_out" \
+  && grep -q 'CVE-2026-22222' <<<"$two_out"; then
+  printf '  ok    two images with their own findings are both reported and both block\n'
+  pass=$((pass + 1))
+else
+  printf '  FAIL  an image in the manifest was not evaluated (exit %s)\n' "$two_status" >&2
+  printf '%s\n' "$two_out" | tail -8 | sed 's/^/        /' >&2
+  fail=$((fail + 1))
+fi
+
 printf '\n%d ok, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

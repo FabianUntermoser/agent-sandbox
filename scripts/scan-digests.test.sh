@@ -21,6 +21,10 @@ cp "$SRC/../security/scan-digests.sh" "$stub/security/scan-digests.sh"
 cat >"$stub/security/scan.sh" <<EOF
 printf '%s\n' "\$1" >>"$work/scanned"
 mkdir -p "\$2"
+printf '{"SchemaVersion":2,"Results":[]}\n' >"\$2/trivy.json"
+printf '%s commit build\n' "\$1" >"\$2/scan-target.txt"
+printf 'Trivy test\nSyft test\n' >"\$2/scanner-versions.txt"
+printf '{"bomFormat":"CycloneDX","specVersion":"1.5","version":1,"components":[]}\n' >"\$2/syft.cdx.json"
 EOF
 chmod +x "$stub/security/scan.sh"
 
@@ -127,6 +131,64 @@ if [ "$status" -eq 0 ] && [ "$pulled" = "busybox@sha256:$hex " ] && [ "$scanned"
 else
 	printf '  FAIL  a rerun left stale manifest/artifacts (manifest=%s, status=%s)\n' "$manifest" "$status" >&2
 	tail -4 <<<"$out" | sed 's/^/        /' >&2
+	failed=1
+fi
+
+printf '  shapes the workflow combines\n'
+# The workflow scans the built image itself and writes its line into the same manifest before the
+# base scan runs. A rewrite that drops that line leaves an image the run did scan unlisted, and the
+# gate then refuses a run whose reports are complete.
+run "FROM alpine@sha256:$hex"
+printf 'agent-sandbox\n' >>"$work/out/scan-manifest.txt"
+mkdir -p "$work/out/agent-sandbox"
+printf 'agent report\n' >"$work/out/agent-sandbox/trivy.json"
+printf 'FROM busybox@sha256:%s\n' "$hex" >"$work/Dockerfile"
+rm -f "$work/pulled" "$work/scanned"
+set +e
+out=$(cd "$work" && PATH="$stub:$PATH" "$stub/security/scan-digests.sh" "$work/out" "$work/Dockerfile" 2>&1)
+status=$?
+set -e
+manifest=''
+[ ! -f "$work/out/scan-manifest.txt" ] || manifest=$(tr '\n' ' ' <"$work/out/scan-manifest.txt")
+if [ "$status" -eq 0 ] && [ "$manifest" = 'agent-sandbox busybox-base ' ] && [ -f "$work/out/agent-sandbox/trivy.json" ] && [ ! -e "$work/out/alpine-base" ]; then
+	printf '  ok    the built image keeps its manifest line and artifacts while bases are replaced\n'
+else
+	printf '  FAIL  the built image entry did not survive the base scan (manifest=%s, status=%s)\n' "$manifest" "$status" >&2
+	tail -4 <<<"$out" | sed 's/^/        /' >&2
+	failed=1
+fi
+
+# The gate reads a directory absent from the manifest as unlisted, so this is the whole pipeline:
+# a built image, a base scan over the same directory, and a policy that sees both.
+run "FROM alpine@sha256:$hex"
+rm -rf "$work/out"
+mkdir -p "$work/out/agent-sandbox"
+printf 'agent-sandbox\n' >"$work/out/scan-manifest.txt"
+printf '{"SchemaVersion":2,"Results":[]}\n' >"$work/out/agent-sandbox/trivy.json"
+printf 'sha256:%s commit build\n' "$hex" >"$work/out/agent-sandbox/scan-target.txt"
+printf 'Trivy test\nSyft test\n' >"$work/out/agent-sandbox/scanner-versions.txt"
+printf '{"bomFormat":"CycloneDX","specVersion":"1.5","version":1,"components":[]}\n' >"$work/out/agent-sandbox/syft.cdx.json"
+rm -f "$work/pulled" "$work/scanned"
+set +e
+out=$(cd "$work" && PATH="$stub:$PATH" "$stub/security/scan-digests.sh" "$work/out" "$work/Dockerfile" 2>&1)
+status=$?
+if [ "$status" -eq 0 ]; then
+	gate_out=$("$SRC/../security/gate.sh" "$work/out" 2>&1)
+	status=$?
+else
+	gate_out=$out
+fi
+set -e
+manifest=''
+[ ! -f "$work/out/scan-manifest.txt" ] || manifest=$(tr '\n' ' ' <"$work/out/scan-manifest.txt")
+if [ "$status" -eq 0 ] \
+	&& [ "$manifest" = 'agent-sandbox alpine-base ' ] \
+	&& grep -q '^agent-sandbox  target=' <<<"$gate_out" \
+	&& grep -q '^alpine-base  target=' <<<"$gate_out"; then
+	printf '  ok    the gate evaluates the built image and every base in one run\n'
+else
+	printf '  FAIL  the gate did not evaluate both images (manifest=%s, status=%s)\n' "$manifest" "$status" >&2
+	tail -6 <<<"$gate_out" | sed 's/^/        /' >&2
 	failed=1
 fi
 

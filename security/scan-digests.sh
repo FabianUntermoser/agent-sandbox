@@ -132,22 +132,31 @@ done < <(sed -n 's/^[[:space:]]*[Ff][Rr][Oo][Mm]\([[:space:]].*\)\?$/\1/p' "$doc
 
 # Record every base before scanning any of them so an interrupted run cannot look complete.
 manifest="$out/scan-manifest.txt"
+# The built image is scanned by the workflow, not here, and its line shares this manifest. It has to
+# survive this rewrite: dropping it leaves a scanned image that the gate reads as unlisted, and the
+# gate then refuses a run whose reports are complete.
+BUILT_IMAGE=agent-sandbox
+kept="$out/.scan-manifest.kept"
+: >"$kept"
 # Remove prior base artifacts listed by this script before replacing the manifest. A failed
 # scan must not leave a previous report eligible to pass the current gate.
 if [ -f "$manifest" ]; then
 	while IFS= read -r old_slug || [ -n "$old_slug" ]; do
 		[[ "$old_slug" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || continue
-		# This directory belongs to the separately scanned final image, not an external FROM.
-		[ "$old_slug" != "agent-sandbox" ] || continue
-		rm -rf "$out/$old_slug"
-	done < "$manifest"
+		# An image this script did not scan keeps its line and its artifacts.
+		if [ "$old_slug" = "$BUILT_IMAGE" ]; then
+			printf '%s\n' "$old_slug" >>"$kept"
+			continue
+		fi
+		rm -rf "${out:?}/$old_slug"
+	done <"$manifest"
 fi
-: > "$manifest"
 for slug in "${slugs[@]}"; do
-	printf '%s\n' "$slug" >>"$manifest"
 	# Old artifacts from a previous invocation must not satisfy this run's manifest.
-	rm -rf "$out/$slug"
+	rm -rf "${out:?}/$slug"
+	printf '%s\n' "$slug" >>"$kept"
 done
+mv "$kept" "$manifest"
 
 ## SCAN
 
