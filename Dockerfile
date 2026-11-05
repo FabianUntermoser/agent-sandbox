@@ -92,7 +92,12 @@ ENV PATH=/home/$USERNAME/.local/bin:/home/$USERNAME/.local/pipx/bin:/home/$USERN
     AGENT_BROWSER_EXECUTABLE_PATH=/usr/local/bin/chromium-headless-shell
 
 RUN pipx install whisper-ctranslate2
-RUN npm install -g @anthropic-ai/claude-code @earendil-works/pi-coding-agent @openai/codex agent-browser@0.39.1
+# npm 12.1.0, unlike the npm shipped in the base image, installs agent-browser's platform binary
+# without the execute bit. The tool chmods that binary at startup as the unprivileged user, which
+# fails on a file owned by root, so the bit is set here and the binary is proved able to run.
+RUN npm install -g @anthropic-ai/claude-code @earendil-works/pi-coding-agent @openai/codex agent-browser@0.39.1 \
+  && chmod +x /home/$USERNAME/.npm-global/lib/node_modules/agent-browser/bin/agent-browser-linux-* \
+  && su "$USERNAME" -c "/home/$USERNAME/.npm-global/bin/agent-browser --version"
 
 # Browser QA. This base ships neither a browser nor the libraries one needs, and the
 # runtime firewall allows no download, so Playwright installs the full Chromium build and
