@@ -3,7 +3,7 @@
 # Dependencies grouped by agent so you can see what each needs.
 
 ARG NODE_VERSION=24-bookworm-slim
-ARG NODE_DIGEST=sha256:51b1100cc2a83d370c6a60952e3f2989c8a43159d0e38586e090f3b3326efefd
+ARG NODE_DIGEST=sha256:01d566e8d94d8c619591d78652babfccd3c6992a3dffa9ed5ab39e11cf6c70e9
 
 FROM node:${NODE_VERSION}@${NODE_DIGEST}
 
@@ -50,7 +50,7 @@ RUN curl -fsSL https://acli.atlassian.com/linux/latest/acli_linux_amd64/acli -o 
   && chmod +x /usr/local/bin/acli
 
 # Update npm independently of the npm bundled with the base Node release.
-RUN npm install --global npm@12.1.0
+RUN npm install --global npm@12.2.2
 
 # worktrunk (wt) is pinned here but not installed in the image: this base ships git
 # 2.39 and wt needs 2.43+, so the worker guest (Debian 13) installs it from these two
@@ -122,9 +122,10 @@ RUN npm install -g playwright@${PLAYWRIGHT_VERSION} \
 RUN printf '#!/bin/sh\nexec /home/%s/.pi/agent/npm/node_modules/@hypabolic/hypa-linux-x64/bin/hypa "$@"\n' \
   "$USERNAME" >/usr/local/bin/hypa && chmod 755 /usr/local/bin/hypa
 
-# Pin the fixed transitive Python packages identified by the scan.
+# Pin the fixed transitive Python packages identified by the scan. setuptools vendors wheel and
+# jaraco.context, so the newer setuptools is what clears both of those.
 RUN pipx runpip whisper-ctranslate2 install --upgrade \
-  setuptools==78.1.1 urllib3==2.8.0 msgpack==1.2.1
+  setuptools==84.2.1 urllib3==2.8.0 msgpack==1.2.3
 
 USER $USERNAME
 WORKDIR /workspace
