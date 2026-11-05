@@ -28,19 +28,39 @@ ln -s "$(command -v fdfind)" /usr/local/bin/fd
 rm -rf /var/lib/apt/lists/*
 EOT
 
-RUN curl -fsSL https://ollama.com/install.sh | OLLAMA_VERSION=0.34.1 sh
+# ollama ships as a pinned artifact rather than through its install script: the script is unpinned
+# code fetched from the network at build time, and it pulls a 1.4 GB tarball through a CDN that
+# resets mid-download. The digest and the retry loop are what the script gave no guarantee of.
+ARG OLLAMA_VERSION=0.40.14
+ARG OLLAMA_SHA256=993e83d08c3d13d17c55009a3e2664c8a25445e644aec3a68bef5abb6abce67d
+RUN <<EOT
+set -eux
+url="https://github.com/ollama/ollama/releases/download/v$OLLAMA_VERSION/ollama-linux-amd64.tar.zst"
+tarball=/tmp/ollama.tar.zst
+rm -f "$tarball"
+attempt=0
+until [ "$attempt" -ge 5 ]; do
+  attempt=$((attempt + 1))
+  curl -fsSL --retry 3 --retry-delay 2 -C - -o "$tarball" "$url" && break
+  sleep 5
+done
+printf '%s  %s\n' "$OLLAMA_SHA256" "$tarball" | sha256sum -c -
+tar --zstd -xf "$tarball" -C /usr/local
+rm -f "$tarball"
+/usr/local/bin/ollama --version
+EOT
 
 RUN <<EOT
 set -eux
-curl -fsSL https://gitlab.com/gitlab-org/cli/-/releases/v1.121.0/downloads/glab_1.121.0_linux_amd64.tar.gz \
+curl -fsSL https://gitlab.com/gitlab-org/cli/-/releases/v1.128.0/downloads/glab_1.128.0_linux_amd64.tar.gz \
   -o /tmp/glab.tar.gz
-tar -xzf /tmp/glab.tar.gz -C /usr/local/bin bin/glab
+tar -xzf /tmp/glab.tar.gz -C /usr/local/bin --strip-components=1 bin/glab
 rm /tmp/glab.tar.gz
 EOT
 
 RUN <<EOT
 set -eux
-curl -fsSL https://github.com/anthropics/anthropic-cli/releases/download/v1.35.0/ant_1.35.0_linux_amd64.tar.gz \
+curl -fsSL https://github.com/anthropics/anthropic-cli/releases/download/v2.6.0/ant_2.6.0_linux_amd64.tar.gz \
   -o /tmp/ant.tar.gz
 tar -xzf /tmp/ant.tar.gz -C /usr/local/bin ant
 rm /tmp/ant.tar.gz
@@ -126,6 +146,11 @@ RUN printf '#!/bin/sh\nexec /home/%s/.pi/agent/npm/node_modules/@hypabolic/hypa-
 # jaraco.context, so the newer setuptools is what clears both of those.
 RUN pipx runpip whisper-ctranslate2 install --upgrade \
   setuptools==84.2.1 urllib3==2.8.0 msgpack==1.2.3
+
+# A root install leaves $HOME/.config owned by root, and glab creates its config directory on the
+# first run, which fails with a permission error for the agent. The smoke proves it runs as node.
+RUN chown -R $USERNAME:$USERNAME /home/$USERNAME/.config \
+  && su "$USERNAME" -c "HOME=/home/$USERNAME glab --version"
 
 USER $USERNAME
 WORKDIR /workspace
