@@ -56,64 +56,38 @@ the same commit as the exception.
 
 ## Runtime trust boundaries
 
-The scanners above judge the image. This section is what the launcher does with it, and where the
-sandbox stops trusting something. The launcher is [`scripts/sandbox.sh`](scripts/sandbox.sh), the
-firewall is [`scripts/init-firewall.sh`](scripts/init-firewall.sh), and the privilege drop is
-[`scripts/sandbox-entrypoint.sh`](scripts/sandbox-entrypoint.sh).
+The launcher is [`scripts/sandbox.sh`](scripts/sandbox.sh), the firewall
+[`scripts/init-firewall.sh`](scripts/init-firewall.sh), the privilege drop
+[`scripts/sandbox-entrypoint.sh`](scripts/sandbox-entrypoint.sh). A run starts as root only long
+enough to build the firewall, then drops `NET_ADMIN` and `NET_RAW` from every capability set and
+the agent runs as `node`.
 
-Every run starts the container as root only long enough to build the firewall. The entrypoint then
-removes `NET_ADMIN` and `NET_RAW` from the bounding, inheritable and ambient sets and drops to
-`node` with `setpriv` before the agent starts.
+**Network.** The default is `NETWORK=bridge` on its own network, never the shared default bridge.
+Egress is default deny: `filter` policies go to `DROP` first, then the pre-resolved allowlist and
+this run's grants are admitted. Every other Docker subnet is closed, so a `<host>:<port>` grant
+cannot reach a sibling container, `HOST_SERVICES` opens only this container's own gateway, and
+`PORTS` publishes on `127.0.0.1` only.
 
-### Network
+`NETWORK=host` skips the firewall (`SANDBOX_SKIP_FIREWALL=1`), so every egress grant is unenforced
+and the container reaches what the host reaches, loopback included. `PORTS` is refused there. It
+still drops to `node` and still runs without `NET_RAW`. Give it only to work that needs the host
+namespace and is trusted as much as the host.
 
-Default (`NETWORK=bridge`): a dedicated network, `agent-sandbox-net`, never the default bridge that
-every other container on the host shares. Egress is default deny. The firewall sets the `filter`
-policies to `DROP` before it allows anything, then admits the pre-resolved allowlist and the grants
-that run was given. The subnet of every Docker network on the host goes into the run's grant file
-and stays closed, so a `<host>:<port>` grant cannot reach a sibling container. `HOST_SERVICES` is
-the one grant that opens the container's own gateway, and `PORTS` publishes on `127.0.0.1` only.
+**Credentials.** `$HOME`, the notes vault below its `work` layer, `~/.ssh`, `~/.gnupg` and the
+grant directory of another run are never mounted, and a project directory that is `$HOME` or holds
+`.ssh` or `.gnupg` is refused. Every other mount is a base-config catalogue entry, gated by its own
+options: `auth` needs `GIT_AUTH=true`, an agent directory needs that agent enabled, `grant=` needs
+its feature, `ro` stays read-only. Claude's directory is never mounted whole, only its credentials
+file and its own project history, and a symlink inside an agent directory is followed only inside a
+declared follow root, so a link planted earlier cannot carry an arbitrary host file in. The
+operator's `~/.gitconfig` is never mounted because it can name a credential helper; the image gets a
+plain config, and a project's `.git/config` still wins. A tool credential is one file, never a
+directory, and never a path on that deny list.
 
-`NETWORK=host` is the opposite trade. The container joins the host network namespace, the firewall
-is skipped with `SANDBOX_SKIP_FIREWALL=1`, and the launcher prints a warning:
-
-- A tool's egress grant is a firewall rule, so with no firewall every grant is unenforced. The
-  container reaches everything the host can reach, loopback services included.
-- `PORTS` is refused with `NETWORK=host`, because a published port means nothing there.
-- The container still starts as root to drop to `node`, and still runs with `NET_RAW` dropped.
-
-Use it only for work that needs the host's own namespace, and only for a workload trusted as much
-as the host itself.
-
-### Credentials
-
-The launcher refuses to hand over `$HOME`, the notes vault below its `work` layer, `~/.ssh`,
-`~/.gnupg`, and the grant directory that carries another run's firewall. A project directory that
-is `$HOME` or that holds `.ssh` or `.gnupg` is refused as well.
-
-Everything else is a catalogue entry in the host's base config, and an entry is mounted only when
-its own gates pass: an `auth` entry needs `GIT_AUTH=true`, an agent directory needs that agent
-enabled, a `grant=` entry needs its feature, and `ro` stays read-only. Two cases are narrowed on
-purpose. Claude's directory is never mounted whole: only its credentials file and the history of
-its own project. And a symlink inside an agent directory is followed only when it resolves inside a
-declared follow root, so a link planted by an earlier run cannot carry an arbitrary host file into
-the next one.
-
-A forge credential reaches the container only with `GIT_AUTH=true`. The operator's own `~/.gitconfig`
-is never mounted, because it can name a credential helper; the image gets a plain config file and a
-project's `.git/config` still wins over it. A tool credential is one file, never a directory, and
-never a path on the deny list above.
-
-### What a compromised container keeps
-
-- Every path mounted for it, readable or writable according to its mode. The mounts are the
-  boundary, not the image.
-- The credentials mounted with it, which is why egress is default deny and the forge credential is
-  gated by `GIT_AUTH`.
-- Nothing privileged from the host by default: no Docker daemon socket, no host network, no extra
-  capability. The launcher mounts no socket, so an agent inside cannot start containers, mount host
-  paths or read other images. The scanners in the notes below are the only thing in this repository
-  that holds the socket, and they run on the host or in CI, never inside the sandbox.
+**What a compromised container keeps.** The mounts, readable or writable by their mode, and the
+credentials mounted with them. Nothing privileged from the host: no daemon socket, no host network,
+no extra capability, so an agent inside cannot start containers or read other images. The scanners
+below are the only thing here that holds the socket, and they run on the host or in CI.
 
 ## Reports
 
