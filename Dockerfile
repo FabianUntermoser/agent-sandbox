@@ -3,7 +3,7 @@
 # Dependencies grouped by agent so you can see what each needs.
 
 ARG NODE_VERSION=24-bookworm-slim
-ARG NODE_DIGEST=sha256:51b1100cc2a83d370c6a60952e3f2989c8a43159d0e38586e090f3b3326efefd
+ARG NODE_DIGEST=sha256:01d566e8d94d8c619591d78652babfccd3c6992a3dffa9ed5ab39e11cf6c70e9
 
 FROM node:${NODE_VERSION}@${NODE_DIGEST}
 
@@ -28,7 +28,7 @@ ln -s "$(command -v fdfind)" /usr/local/bin/fd
 rm -rf /var/lib/apt/lists/*
 EOT
 
-RUN curl -fsSL https://ollama.com/install.sh | sh
+RUN curl -fsSL https://ollama.com/install.sh | OLLAMA_VERSION=0.34.1 sh
 
 RUN <<EOT
 set -eux
@@ -40,7 +40,7 @@ EOT
 
 RUN <<EOT
 set -eux
-curl -fsSL https://github.com/anthropics/anthropic-cli/releases/download/v1.16.0/ant_1.16.0_linux_amd64.tar.gz \
+curl -fsSL https://github.com/anthropics/anthropic-cli/releases/download/v1.35.0/ant_1.35.0_linux_amd64.tar.gz \
   -o /tmp/ant.tar.gz
 tar -xzf /tmp/ant.tar.gz -C /usr/local/bin ant
 rm /tmp/ant.tar.gz
@@ -48,6 +48,9 @@ EOT
 
 RUN curl -fsSL https://acli.atlassian.com/linux/latest/acli_linux_amd64/acli -o /usr/local/bin/acli \
   && chmod +x /usr/local/bin/acli
+
+# Update npm independently of the npm bundled with the base Node release.
+RUN npm install --global npm@12.2.2
 
 # worktrunk (wt) is pinned here but not installed in the image: this base ships git
 # 2.39 and wt needs 2.43+, so the worker guest (Debian 13) installs it from these two
@@ -89,7 +92,12 @@ ENV PATH=/home/$USERNAME/.local/bin:/home/$USERNAME/.local/pipx/bin:/home/$USERN
     AGENT_BROWSER_EXECUTABLE_PATH=/usr/local/bin/chromium-headless-shell
 
 RUN pipx install whisper-ctranslate2
-RUN npm install -g @anthropic-ai/claude-code @earendil-works/pi-coding-agent @openai/codex agent-browser@0.39.1
+# npm 12.1.0, unlike the npm shipped in the base image, installs agent-browser's platform binary
+# without the execute bit. The tool chmods that binary at startup as the unprivileged user, which
+# fails on a file owned by root, so the bit is set here and the binary is proved able to run.
+RUN npm install -g @anthropic-ai/claude-code @earendil-works/pi-coding-agent @openai/codex agent-browser@0.39.1 \
+  && chmod +x /home/$USERNAME/.npm-global/lib/node_modules/agent-browser/bin/agent-browser-linux-* \
+  && su "$USERNAME" -c "/home/$USERNAME/.npm-global/bin/agent-browser --version"
 
 # Browser QA. This base ships neither a browser nor the libraries one needs, and the
 # runtime firewall allows no download, so Playwright installs the full Chromium build and
@@ -113,6 +121,11 @@ RUN npm install -g playwright@${PLAYWRIGHT_VERSION} \
 # host shim execs an absolute path under the operator's home, which does not exist in here.
 RUN printf '#!/bin/sh\nexec /home/%s/.pi/agent/npm/node_modules/@hypabolic/hypa-linux-x64/bin/hypa "$@"\n' \
   "$USERNAME" >/usr/local/bin/hypa && chmod 755 /usr/local/bin/hypa
+
+# Pin the fixed transitive Python packages identified by the scan. setuptools vendors wheel and
+# jaraco.context, so the newer setuptools is what clears both of those.
+RUN pipx runpip whisper-ctranslate2 install --upgrade \
+  setuptools==84.2.1 urllib3==2.8.0 msgpack==1.2.3
 
 USER $USERNAME
 WORKDIR /workspace

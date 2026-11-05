@@ -17,6 +17,8 @@ check:
 	./scripts/sandbox-firewall.test.sh
 	./scripts/sandbox-permission-policy.test.sh
 	./scripts/image-build.test.sh
+	./scripts/scan-digests.test.sh
+	./scripts/gate.test.sh
 
 # Real container: the browser is what it proves, so it needs docker and the image.
 browser-check:
@@ -27,6 +29,18 @@ worktree-check:
 	./scripts/sandbox-worktree.test.sh
 	./scripts/sandbox-worktree-siblings.test.sh
 	./scripts/sandbox-git-hooks.test.sh
+
+# reports land in security-out/, which git ignores: they are evidence for a run, not for the repo
+scan:
+	rm -rf security-out
+	$(MAKE) build
+	mkdir -p security-out/agent-sandbox
+	printf '%s\n' agent-sandbox > security-out/scan-manifest.txt
+	./security/scan.sh "$$(docker image inspect --format '{{.Id}}' agent-sandbox:latest)" security-out/agent-sandbox
+	./security/scan-digests.sh security-out
+
+gate:
+	./security/gate.sh security-out
 
 setup:
 	./scripts/setup.sh
@@ -64,4 +78,4 @@ vm-pair:
 vm-destroy:
 	./vm/vworker.sh destroy --yes
 
-.PHONY: build check browser-check worktree-check setup uninstall shell claude pi vm-create vm-start vm-stop vm-status vm-sync vm-pair vm-destroy
+.PHONY: build check browser-check worktree-check scan gate setup uninstall shell claude pi vm-create vm-start vm-stop vm-status vm-sync vm-pair vm-destroy
