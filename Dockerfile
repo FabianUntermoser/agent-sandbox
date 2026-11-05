@@ -28,22 +28,54 @@ ln -s "$(command -v fdfind)" /usr/local/bin/fd
 rm -rf /var/lib/apt/lists/*
 EOT
 
-RUN curl -fsSL https://ollama.com/install.sh | OLLAMA_VERSION=0.34.1 sh
-
+# ollama ships as a pinned artifact, not through its install script: the script is unpinned code
+# from the network, and the 1.4 GB tarball comes from a CDN that resets mid-download.
+ARG OLLAMA_VERSION=0.40.14
+ARG OLLAMA_SHA256=993e83d08c3d13d17c55009a3e2664c8a25445e644aec3a68bef5abb6abce67d
 RUN <<EOT
 set -eux
-curl -fsSL https://gitlab.com/gitlab-org/cli/-/releases/v1.121.0/downloads/glab_1.121.0_linux_amd64.tar.gz \
-  -o /tmp/glab.tar.gz
-tar -xzf /tmp/glab.tar.gz -C /usr/local/bin bin/glab
-rm /tmp/glab.tar.gz
+url="https://github.com/ollama/ollama/releases/download/v$OLLAMA_VERSION/ollama-linux-amd64.tar.zst"
+tarball=/tmp/ollama.tar.zst
+rm -f "$tarball"
+attempt=0
+until [ "$attempt" -ge 5 ]; do
+  attempt=$((attempt + 1))
+  curl -fsSL --retry 3 --retry-delay 2 -C - -o "$tarball" "$url" && break
+  sleep 5
+done
+printf '%s  %s\n' "$OLLAMA_SHA256" "$tarball" | sha256sum -c -
+tar --zstd -xf "$tarball" -C /usr/local
+rm -f "$tarball"
+/usr/local/bin/ollama --version
 EOT
 
+# glab and ant publish checksums beside their artifacts. The pinned digest gates extraction, so a
+# truncated or swapped download fails the build. Neither release is signed, see SECURITY.md.
+ARG GLAB_VERSION=1.128.0
+ARG GLAB_SHA256=bc024819e7598b19429a199cd87f640d98b2b67416d8ad796f19e4260b57a7c7
 RUN <<EOT
 set -eux
-curl -fsSL https://github.com/anthropics/anthropic-cli/releases/download/v1.35.0/ant_1.35.0_linux_amd64.tar.gz \
-  -o /tmp/ant.tar.gz
-tar -xzf /tmp/ant.tar.gz -C /usr/local/bin ant
-rm /tmp/ant.tar.gz
+url="https://gitlab.com/gitlab-org/cli/-/releases/v$GLAB_VERSION/downloads/glab_${GLAB_VERSION}_linux_amd64.tar.gz"
+tarball=/tmp/glab.tar.gz
+curl -fsSL --retry 3 --retry-delay 2 -o "$tarball" "$url"
+printf '%s  %s\n' "$GLAB_SHA256" "$tarball" | sha256sum -c - ||
+  { printf 'glab: %s does not match the pinned digest\n' "$tarball" >&2; exit 1; }
+tar -xzf "$tarball" -C /usr/local/bin --strip-components=1 bin/glab
+rm -f "$tarball"
+EOT
+
+ARG ANT_VERSION=2.7.0
+ARG ANT_SHA256=f219a53160af820066de9ee2483fda499344e1124afcecc84ef8fdd649ce9845
+RUN <<EOT
+set -eux
+url="https://github.com/anthropics/anthropic-cli/releases/download/v$ANT_VERSION/ant_${ANT_VERSION}_linux_amd64.tar.gz"
+tarball=/tmp/ant.tar.gz
+curl -fsSL --retry 3 --retry-delay 2 -o "$tarball" "$url"
+printf '%s  %s\n' "$ANT_SHA256" "$tarball" | sha256sum -c - ||
+  { printf 'ant: %s does not match the pinned digest\n' "$tarball" >&2; exit 1; }
+tar -xzf "$tarball" -C /usr/local/bin ant
+rm -f "$tarball"
+/usr/local/bin/ant --version
 EOT
 
 RUN curl -fsSL https://acli.atlassian.com/linux/latest/acli_linux_amd64/acli -o /usr/local/bin/acli \
@@ -126,6 +158,11 @@ RUN printf '#!/bin/sh\nexec /home/%s/.pi/agent/npm/node_modules/@hypabolic/hypa-
 # jaraco.context, so the newer setuptools is what clears both of those.
 RUN pipx runpip whisper-ctranslate2 install --upgrade \
   setuptools==84.2.1 urllib3==2.8.0 msgpack==1.2.3
+
+# A root install leaves $HOME/.config owned by root, and glab creates its config directory on the
+# first run, which fails with a permission error for the agent. The smoke proves it runs as node.
+RUN chown -R $USERNAME:$USERNAME /home/$USERNAME/.config \
+  && su "$USERNAME" -c "HOME=/home/$USERNAME glab --version"
 
 USER $USERNAME
 WORKDIR /workspace
