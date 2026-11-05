@@ -28,9 +28,8 @@ ln -s "$(command -v fdfind)" /usr/local/bin/fd
 rm -rf /var/lib/apt/lists/*
 EOT
 
-# ollama ships as a pinned artifact rather than through its install script: the script is unpinned
-# code fetched from the network at build time, and it pulls a 1.4 GB tarball through a CDN that
-# resets mid-download. The digest and the retry loop are what the script gave no guarantee of.
+# ollama ships as a pinned artifact, not through its install script: the script is unpinned code
+# from the network, and the 1.4 GB tarball comes from a CDN that resets mid-download.
 ARG OLLAMA_VERSION=0.40.14
 ARG OLLAMA_SHA256=993e83d08c3d13d17c55009a3e2664c8a25445e644aec3a68bef5abb6abce67d
 RUN <<EOT
@@ -50,20 +49,33 @@ rm -f "$tarball"
 /usr/local/bin/ollama --version
 EOT
 
+# glab and ant publish checksums beside their artifacts. The pinned digest gates extraction, so a
+# truncated or swapped download fails the build. Neither release is signed, see SECURITY.md.
+ARG GLAB_VERSION=1.128.0
+ARG GLAB_SHA256=bc024819e7598b19429a199cd87f640d98b2b67416d8ad796f19e4260b57a7c7
 RUN <<EOT
 set -eux
-curl -fsSL https://gitlab.com/gitlab-org/cli/-/releases/v1.128.0/downloads/glab_1.128.0_linux_amd64.tar.gz \
-  -o /tmp/glab.tar.gz
-tar -xzf /tmp/glab.tar.gz -C /usr/local/bin --strip-components=1 bin/glab
-rm /tmp/glab.tar.gz
+url="https://gitlab.com/gitlab-org/cli/-/releases/v$GLAB_VERSION/downloads/glab_${GLAB_VERSION}_linux_amd64.tar.gz"
+tarball=/tmp/glab.tar.gz
+curl -fsSL --retry 3 --retry-delay 2 -o "$tarball" "$url"
+printf '%s  %s\n' "$GLAB_SHA256" "$tarball" | sha256sum -c - ||
+  { printf 'glab: %s does not match the pinned digest\n' "$tarball" >&2; exit 1; }
+tar -xzf "$tarball" -C /usr/local/bin --strip-components=1 bin/glab
+rm -f "$tarball"
 EOT
 
+ARG ANT_VERSION=2.7.0
+ARG ANT_SHA256=f219a53160af820066de9ee2483fda499344e1124afcecc84ef8fdd649ce9845
 RUN <<EOT
 set -eux
-curl -fsSL https://github.com/anthropics/anthropic-cli/releases/download/v2.6.0/ant_2.6.0_linux_amd64.tar.gz \
-  -o /tmp/ant.tar.gz
-tar -xzf /tmp/ant.tar.gz -C /usr/local/bin ant
-rm /tmp/ant.tar.gz
+url="https://github.com/anthropics/anthropic-cli/releases/download/v$ANT_VERSION/ant_${ANT_VERSION}_linux_amd64.tar.gz"
+tarball=/tmp/ant.tar.gz
+curl -fsSL --retry 3 --retry-delay 2 -o "$tarball" "$url"
+printf '%s  %s\n' "$ANT_SHA256" "$tarball" | sha256sum -c - ||
+  { printf 'ant: %s does not match the pinned digest\n' "$tarball" >&2; exit 1; }
+tar -xzf "$tarball" -C /usr/local/bin ant
+rm -f "$tarball"
+/usr/local/bin/ant --version
 EOT
 
 RUN curl -fsSL https://acli.atlassian.com/linux/latest/acli_linux_amd64/acli -o /usr/local/bin/acli \

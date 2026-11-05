@@ -135,6 +135,9 @@ there. The reports land in `security-out/`, which git ignores.
   run, not who published it: verifying a signature with Cosign or Notation is the next step there.
 - The scanners hold `/var/run/docker.sock`, which is daemon-level authority over the machine that
   runs them. Scanning an exported OCI archive would remove the need for the socket.
+- ollama, glab and ant are pinned by `sha256` in the `Dockerfile`, and the build refuses to extract
+  an artifact that does not match. The digest comes from the publisher over TLS: it catches a
+  truncated or swapped download, not a compromised release, since none of the three is signed.
 - The Trivy database goes in a volume, which the CI job names once for both of its scans. Without
   one, every scan fetches the database again, so a local `make scan` fetches it twice where CI
   fetches it once.
