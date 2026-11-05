@@ -141,6 +141,60 @@ else
 	nok "agent-browser smoke test failed"
 	printf '%s\n' "$ab_out" | sed 's/^/  | /' >&2
 fi
+# Lightpanda: the second engine. It must launch behind agent-browser, read and click the fixture,
+# and its own MCP server must answer a tool listing, or the image ships an engine no agent can use.
+read -r -d '' LP_PROBE <<'LPPROBE' || true
+set -euo pipefail
+python3 -m http.server 8124 --directory /fixture >/tmp/lightpanda-http.log 2>&1 &
+server=$!
+cleanup() {
+  agent-browser close --all >/dev/null 2>&1 || true
+  kill "$server" 2>/dev/null || true
+  wait "$server" 2>/dev/null || true
+}
+trap cleanup EXIT
+ready=no
+for _ in $(seq 1 40); do
+  if curl -fsS -o /dev/null http://127.0.0.1:8124/ 2>/dev/null; then ready=yes; break; fi
+  sleep 0.25
+done
+if [ "$ready" != yes ]; then
+  cat /tmp/lightpanda-http.log >&2 || true
+  echo "lightpanda-fixture-server=not-ready"
+  exit 1
+fi
+printf 'lightpanda-version=%s\n' "$(lightpanda version)"
+printf 'lightpanda-sha256=%s\n' "$(sha256sum /usr/local/bin/lightpanda | cut -d' ' -f1)"
+# AGENT_BROWSER_EXECUTABLE_PATH wins over `--engine` in this image, so the engine flag alone
+# launches Chromium and fails with "Multiple targets are not supported". The explicit path is
+# what makes the CLI path reach Lightpanda at all, and it has to ride on every call.
+ab=(agent-browser --engine lightpanda --executable-path /usr/local/bin/lightpanda)
+"${ab[@]}" open http://127.0.0.1:8124/
+printf 'lightpanda-content=%s\n' "$("${ab[@]}" get text '#title')"
+"${ab[@]}" click '#go'
+printf 'lightpanda-after-click=%s\n' "$("${ab[@]}" get text '#title')"
+# The engine's own MCP server is the surface an agent reads with, and it needs no agent-browser.
+init='{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"smoke","version":"1"}}}'
+goto='{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"goto","arguments":{"url":"http://127.0.0.1:8124/"}}}'
+read_back='{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"evaluate","arguments":{"script":"document.getElementById(\"title\").textContent"}}}'
+mcp="$(printf '%s\n%s\n%s\n' "$init" "$goto" "$read_back" | lightpanda mcp 2>/dev/null || true)"
+printf 'lightpanda-mcp-tools=%s\n' "$(printf '%s' "$mcp" | grep -c '\"tools\"')"
+printf 'lightpanda-mcp-text=%s\n' "$(printf '%s' "$mcp" | grep -c 'fixture')"
+LPPROBE
+
+printf '  lightpanda smoke test\n'
+if lp_out="$(in_image "$LP_PROBE" 2>&1)"; then
+	lp_field() { printf '%s\n' "$lp_out" | sed -n "s/^$1=//p" | tail -1; }
+	[ "$(lp_field lightpanda-content)" = "fixture" ] && ok "lightpanda reads the fixture through agent-browser" || nok "lightpanda content: wanted fixture, got [$(lp_field lightpanda-content)]"
+	[ "$(lp_field lightpanda-after-click)" = "clicked" ] && ok "lightpanda clicks on the fixture" || nok "lightpanda after-click: wanted clicked, got [$(lp_field lightpanda-after-click)]"
+	[ "$(lp_field lightpanda-mcp-tools)" = "1" ] && ok "the lightpanda MCP server answers a tool listing" || nok "lightpanda MCP: no tool listing came back"
+	[ "$(lp_field lightpanda-mcp-text)" = "2" ] && ok "the lightpanda MCP server navigates and reads the fixture" || nok "lightpanda MCP: the fixture text did not come back twice, got [$(lp_field lightpanda-mcp-text)]"
+	printf '%s\n' "$lp_out" | grep -E '^lightpanda-(version|sha256)=' | sed 's/^/        /'
+else
+	nok "lightpanda smoke test failed"
+	printf '%s\n' "$lp_out" | sed 's/^/  | /' >&2
+fi
+
 printf '  screenshots: %s\n' "$SHOTS"
 
 if [ "$failed" -ne 0 ]; then

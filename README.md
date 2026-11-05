@@ -25,6 +25,17 @@ reported.
   DevTools URL. Keep the two paths distinct: `make browser-check` requires Docker and an image and
   exercises the real browser; a successful static/unit test does not establish an `agent-browser`
   runtime pass. The browser smoke test has not yet been made a required CI workflow check.
+- **Lightpanda is baked in as the second engine**, pinned by release asset and checksum
+  (`LIGHTPANDA_VERSION`, `LIGHTPANDA_SHA256_AMD64`, `LIGHTPANDA_SHA256_ARM64`), for the same reason
+  Chromium is: the runtime firewall allows no download. It is reachable two ways, `lightpanda mcp`
+  over stdio and `agent-browser --engine lightpanda`, and both are proved by `make browser-check`
+  alongside the Chromium path. The CLI way has a trap worth knowing: `AGENT_BROWSER_EXECUTABLE_PATH`
+  wins over `--engine`, so the flag alone launches Chromium and fails with `Multiple targets are not
+  supported`; pass `--executable-path /usr/local/bin/lightpanda` on every call. The MCP server needs
+  none of that, which is why reading work goes through it. Chromium stays the engine for interaction
+  and screenshots: Lightpanda lays out CSS partially and does not honour element visibility the way
+  Chromium does, so a click it reports as done may have done nothing. Which engine a job belongs to is
+  the `browser` skill's rule.
 - Every sandbox runs on its own network, with egress denied by default. [Egress](#egress) covers
   the allowlist, the host services and the ways out of it.
 - `config/base.conf` is the catalogue of what a sandbox may inherit, and `BASE=full` grants the
