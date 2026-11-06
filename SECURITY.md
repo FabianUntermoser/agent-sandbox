@@ -27,6 +27,12 @@ of scanning a tag.
 Nothing else here is a container image. The worker VM boots a Debian disk image, which the
 scanners do not read.
 
+A binary baked in from an upstream release is proved by its pinned checksum and a build-time
+version proof, and the language catalogers read only what the binary records about itself. The
+Lightpanda release asset carries no Go module metadata, so neither Syft nor Trivy attributes a
+package or an advisory to it: its coverage is the `sha256sum` check and `LIGHTPANDA_VERSION`, not
+the scan.
+
 ## Policy
 
 ```

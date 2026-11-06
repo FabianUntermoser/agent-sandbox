@@ -117,6 +117,28 @@ RUN npm install -g playwright@${PLAYWRIGHT_VERSION} \
   && ln -sf /home/$USERNAME/.npm-global/bin/agent-browser /usr/local/bin/agent-browser \
   && ln -sf /home/$USERNAME/.npm-global/bin/playwright /usr/local/bin/playwright
 
+# Lightpanda: a headless engine built for machines, and the second engine behind agent-browser.
+# It is baked here for the same reason Chromium is, the runtime firewall allows no download, and
+# the version is pinned by asset URL and checksum so a rebuild cannot drift to a new nightly.
+# Reading and extraction belong to it, interaction and screenshots stay on Chromium: its CSS
+# layout is partial and its clicks do not honour visibility the way Chromium's do. The routing
+# rule itself lives in the `browser` skill, not here.
+ARG LIGHTPANDA_VERSION=1.0.3
+ARG LIGHTPANDA_SHA256_AMD64=53eb34da09159dcf8f04865dbfe3e63e9a652062684495aa7ced5ddd7c82e8b0
+ARG LIGHTPANDA_SHA256_ARM64=20a5348bf3b6f71e41088223b188552ab550c1b9c9a9cbd8f099e6f7f3d78549
+RUN set -eux; \
+  arch="$(dpkg --print-architecture)"; \
+  case "$arch" in \
+    amd64) asset=lightpanda-x86_64-linux; sum="$LIGHTPANDA_SHA256_AMD64" ;; \
+    arm64) asset=lightpanda-aarch64-linux; sum="$LIGHTPANDA_SHA256_ARM64" ;; \
+    *) echo "lightpanda: unsupported architecture $arch" >&2; exit 1 ;; \
+  esac; \
+  curl -fsSL -o /usr/local/bin/lightpanda \
+    "https://github.com/lightpanda-io/browser/releases/download/${LIGHTPANDA_VERSION}/${asset}"; \
+  echo "${sum}  /usr/local/bin/lightpanda" | sha256sum -c -; \
+  chmod 0755 /usr/local/bin/lightpanda; \
+  su "$USERNAME" -c "lightpanda version"
+
 # The hypa CLI ships as a shim over the package tree the agent mounts, never over a host path: the
 # host shim execs an absolute path under the operator's home, which does not exist in here.
 RUN printf '#!/bin/sh\nexec /home/%s/.pi/agent/npm/node_modules/@hypabolic/hypa-linux-x64/bin/hypa "$@"\n' \

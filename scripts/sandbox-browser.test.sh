@@ -141,6 +141,125 @@ else
 	nok "agent-browser smoke test failed"
 	printf '%s\n' "$ab_out" | sed 's/^/  | /' >&2
 fi
+# Lightpanda: the second engine. It must launch behind agent-browser, read and click the fixture,
+# and its own MCP server must answer a tool listing, or the image ships an engine no agent can use.
+read -r -d '' LP_PROBE <<'LPPROBE' || true
+set -euo pipefail
+python3 -m http.server 8124 --directory /fixture >/tmp/lightpanda-http.log 2>&1 &
+server=$!
+cleanup() {
+  agent-browser close --all >/dev/null 2>&1 || true
+  kill "$server" 2>/dev/null || true
+  wait "$server" 2>/dev/null || true
+}
+trap cleanup EXIT
+ready=no
+for _ in $(seq 1 40); do
+  if curl -fsS -o /dev/null http://127.0.0.1:8124/ 2>/dev/null; then ready=yes; break; fi
+  sleep 0.25
+done
+if [ "$ready" != yes ]; then
+  cat /tmp/lightpanda-http.log >&2 || true
+  echo "lightpanda-fixture-server=not-ready"
+  exit 1
+fi
+printf 'lightpanda-version=%s\n' "$(lightpanda version)"
+printf 'lightpanda-sha256=%s\n' "$(sha256sum /usr/local/bin/lightpanda | cut -d' ' -f1)"
+# AGENT_BROWSER_EXECUTABLE_PATH wins over `--engine` in this image, so the engine flag alone
+# launches Chromium and fails with "Multiple targets are not supported". The explicit path is
+# what makes the CLI path reach Lightpanda at all, and it has to ride on every call.
+ab=(agent-browser --engine lightpanda --executable-path /usr/local/bin/lightpanda)
+"${ab[@]}" open http://127.0.0.1:8124/
+printf 'lightpanda-content=%s\n' "$("${ab[@]}" get text '#title')"
+"${ab[@]}" click '#go'
+printf 'lightpanda-after-click=%s\n' "$("${ab[@]}" get text '#title')"
+# The engine's own MCP server is the surface an agent reads with, and it needs no agent-browser.
+# Every answer is read as JSON-RPC and checked field by field: a substring match cannot tell a
+# successful call from an error payload that happens to quote the page, and it cannot tell the
+# protocol apart from the text it was searching. The driver keeps the stream open between calls,
+# because the server answers on stdin close otherwise, and it fails loud on an error member.
+python3 - <<'PY'
+import json
+import subprocess
+import sys
+
+URL = "http://127.0.0.1:8124/"
+proc = subprocess.Popen(["lightpanda", "mcp"], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                        stderr=subprocess.DEVNULL, text=True, bufsize=1)
+next_id = 0
+
+
+def call(method, params=None):
+    global next_id
+    next_id += 1
+    req = {"jsonrpc": "2.0", "id": next_id, "method": method}
+    if params is not None:
+        req["params"] = params
+    proc.stdin.write(json.dumps(req) + "\n")
+    proc.stdin.flush()
+    while True:
+        line = proc.stdout.readline()
+        if not line:
+            raise SystemExit(f"mcp: no answer to {method}")
+        line = line.strip()
+        if not line:
+            continue
+        msg = json.loads(line)
+        if msg.get("id") != next_id:
+            continue
+        if "error" in msg:
+            raise SystemExit(f"mcp: {method} failed: {json.dumps(msg['error'])[:200]}")
+        return msg["result"]
+
+
+def text_of(result):
+    return "".join(part.get("text", "") for part in result.get("content") or [])
+
+
+init = call("initialize", {"protocolVersion": "2024-11-05", "capabilities": {},
+                           "clientInfo": {"name": "smoke", "version": "1"}})
+print(f"lp-mcp-protocol={init.get('protocolVersion', '')}")
+print(f"lp-mcp-server={init.get('serverInfo', {}).get('name', '')}")
+print("lp-mcp-tools-capability=%s" % ("yes" if "tools" in (init.get("capabilities") or {}) else "no"))
+
+tools = call("tools/list", {})
+names = [tool["name"] for tool in tools.get("tools") or []]
+print(f"lp-mcp-tool-count={len(names)}")
+print("lp-mcp-has-goto=%s" % ("yes" if "goto" in names else "no"))
+print("lp-mcp-has-evaluate=%s" % ("yes" if "evaluate" in names else "no"))
+
+goto = call("tools/call", {"name": "goto", "arguments": {"url": URL}})
+print("lp-mcp-goto-error=%s" % ("yes" if goto.get("isError") else "no"))
+
+evaluated = call("tools/call", {"name": "evaluate",
+                                "arguments": {"script": "document.getElementById('title').textContent"}})
+print("lp-mcp-evaluate-error=%s" % ("yes" if evaluated.get("isError") else "no"))
+print(f"lp-mcp-evaluate-text={text_of(evaluated).strip()}")
+proc.stdin.close()
+proc.kill()
+PY
+LPPROBE
+
+printf '  lightpanda smoke test\n'
+if lp_out="$(in_image "$LP_PROBE" 2>&1)"; then
+	lp_field() { printf '%s\n' "$lp_out" | sed -n "s/^$1=//p" | tail -1; }
+	[ "$(lp_field lightpanda-content)" = "fixture" ] && ok "lightpanda reads the fixture through agent-browser" || nok "lightpanda content: wanted fixture, got [$(lp_field lightpanda-content)]"
+	[ "$(lp_field lightpanda-after-click)" = "clicked" ] && ok "lightpanda clicks on the fixture" || nok "lightpanda after-click: wanted clicked, got [$(lp_field lightpanda-after-click)]"
+	[ "$(lp_field lp-mcp-server)" = lightpanda ] && ok "the lightpanda MCP server answers initialize" || nok "lightpanda MCP: wanted serverInfo.name lightpanda, got [$(lp_field lp-mcp-server)]"
+	[ "$(lp_field lp-mcp-tools-capability)" = yes ] && ok "it advertises the tools capability" || nok "lightpanda MCP: no tools capability in the initialize result"
+	{ [ "$(lp_field lp-mcp-tool-count)" -gt 0 ] 2>/dev/null; } && [ "$(lp_field lp-mcp-has-goto)" = yes ] && [ "$(lp_field lp-mcp-has-evaluate)" = yes ] \
+		&& ok "tools/list returns $(lp_field lp-mcp-tool-count) tools including goto and evaluate" \
+		|| nok "lightpanda MCP: tools/list returned [$(lp_field lp-mcp-tool-count)] tools, goto [$(lp_field lp-mcp-has-goto)], evaluate [$(lp_field lp-mcp-has-evaluate)]"
+	[ "$(lp_field lp-mcp-goto-error)" = no ] && ok "goto returns a success result, not an error result" || nok "lightpanda MCP: goto returned an error result"
+	[ "$(lp_field lp-mcp-evaluate-error)" = no ] && [ "$(lp_field lp-mcp-evaluate-text)" = fixture ] \
+		&& ok "evaluate reads the fixture through the MCP session" \
+		|| nok "lightpanda MCP: evaluate wanted fixture, got [$(lp_field lp-mcp-evaluate-text)] (error [$(lp_field lp-mcp-evaluate-error)])"
+	printf '%s\n' "$lp_out" | grep -E '^lightpanda-(version|sha256)=|^lp-mcp-' | sed 's/^/        /'
+else
+	nok "lightpanda smoke test failed"
+	printf '%s\n' "$lp_out" | sed 's/^/  | /' >&2
+fi
+
 printf '  screenshots: %s\n' "$SHOTS"
 
 if [ "$failed" -ne 0 ]; then
